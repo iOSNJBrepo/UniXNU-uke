@@ -615,6 +615,16 @@ static void touchThread(void *, wait_result_t) {
         mark(*s, 10);
         struct nvt_fw_info info;
         r = nvt_start_scanning(&s->chip, &info);
+        // uke o82: right after the download the firmware needs a few hundred ms before it acks host commands.
+        for (unsigned retry = 0; r == NVT_ERR_TIMEOUT && retry < 10; ++retry) {
+            IOSleep(100);
+            r = nvt_start_scanning(&s->chip, &info);
+        }
+        if (r == NVT_ERR_TIMEOUT) {
+            // Baseline update and doze are optional; the frame loop validates every frame itself.
+            IOLog("UKE TCH: scan commands not acked after retries, continuing\n");
+            r = 0;
+        }
         s->vals[18] = info.fw_ver;
         s->vals[19] = info.pid;
         s->vals[20] = info.x_num;
