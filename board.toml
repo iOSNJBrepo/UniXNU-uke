@@ -26,7 +26,7 @@ fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustC
 # first_lba and last_lba are the GPT entry "userdata" of LUN 0, read from the tablet.
 [userdata]
 first_lba = 0x2d3000
-last_lba = 0x3b147fa
+last_lba = 0x1d497fa
 lba_bytes = 4096
 windows = [
   { name = "OS", component = "OS" },
