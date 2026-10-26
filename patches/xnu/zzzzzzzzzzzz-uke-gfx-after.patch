@@ -1,0 +1,43 @@
+diff --git a/osfmk/console/video_console.c b/osfmk/console/video_console.c
+index 43eb668..a65ce7c 100644
+--- a/osfmk/console/video_console.c
++++ b/osfmk/console/video_console.c
+@@ -3060,6 +3060,23 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
+ 	    vinfo.v_rowbytes, vinfo.v_depth);
+ }
+ 
++/*
++ * uke-gfx-after=N: the console is switched to text with -uketextconsole so the boot log is readable, and
++ * N seconds later it is handed back to graphics so the progress logo and the compositor own the screen.
++ * The release/acquire pair is the one vcattach() runs for a non-graphics boot.
++ */
++static thread_call_data_t uke_gfx_call;
++
++static void
++uke_gfx_task(__unused void *arg0, __unused void *arg1)
++{
++	if (gc_acquired) {
++		initialize_screen(NULL, kPEReleaseScreen);
++	}
++	initialize_screen(NULL, kPEAcquireScreen);
++	kprintf("uke-gfx-after: console handed back to graphics\n");
++}
++
+ void vcattach(void); /* XXX gcc 4 warning cleanup */
+ 
+ void
+@@ -3075,6 +3092,14 @@ vcattach(void)
+ 		initialize_screen(NULL, kPETextScreen);
+ 		extern void pe_print_last_panic(void);
+ 		pe_print_last_panic();
++
++		uint32_t gfx_after = 0;
++		if (PE_parse_boot_argn("uke-gfx-after", &gfx_after, sizeof(gfx_after)) && gfx_after) {
++			uint64_t deadline;
++			thread_call_setup(&uke_gfx_call, uke_gfx_task, NULL);
++			clock_interval_to_deadline(gfx_after, NSEC_PER_SEC, &deadline);
++			thread_call_enter_delayed(&uke_gfx_call, deadline);
++		}
+ 	}
+ 
+ #if defined(CONFIG_VC_PROGRESS_METER_SUPPORT)
