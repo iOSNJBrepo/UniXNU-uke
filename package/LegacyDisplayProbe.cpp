@@ -24,6 +24,9 @@ extern "C" void native_gop_presenter_static_init(void) __asm__("__GLOBAL__sub_I_
 extern "C" IOService *native_gop_presenter_create(void);
 // Present the default framebuffer surface after an overlay-only SwapEnd (offline-legacy-base-present).
 extern "C" void native_legacy_present_base(void *display,unsigned frameSurfaceId);
+// The default framebuffer region below, for NativeAdreno: the compositor renders into the surface built on it, and backboardd's own
+// mapping of that surface is read-only, so the GPU import of it must not lose its write permission.
+extern "C" {IOMemoryDescriptor *native_legacy_default_region;}
 static IOService *pendingLegacyDisplay;
 static IOService *activeGOPPresenter,*activeGOPNub;
 // GPU hand-off presenter (sheng-fb-gpu=1, phase 4): lives beside the display driver, which offers it frames instead of copying them.
@@ -778,6 +781,7 @@ void native_legacy_display_late_probe(void) {
                             if(region) {
                                 memcpy(fb+0x17c0,&region,sizeof(region));
                                 fb[0x1780]|=1;
+                                native_legacy_default_region=region;
                                 IOLog("UKE: default surface region=%p bytes=%llu\n",
                                     region,(unsigned long long)region->getLength());
                             } else {

@@ -165,6 +165,25 @@ failed:
  * the import), and the object then lives on until the import completes instead of being torn down under a wired UPL (int-233..235: the render
  * thread stuck in vm_deallocate). A range no memory entry can be made of is imported as before; [0] counts the persistent imports, [1] those. */
 extern "C" {volatile uint32_t native_adreno_import_persistent[2];}
+/* uke: the display's default framebuffer region (LegacyDisplayProbe.cpp). The compositor's render surface lives in it and backboardd maps
+ * that surface read-only, so its pin falls back to reading; the GPU is the one meant to write it, so such an import keeps write access. */
+extern "C" IOMemoryDescriptor *native_legacy_default_region __attribute__((weak));
+static bool insideDefaultRegion(IOMemoryDescriptor *imported)
+{
+    if(!&native_legacy_default_region || !native_legacy_default_region || !imported)return false;
+    IOByteCount length=0;
+    const addr64_t first=imported->getPhysicalSegment(0,&length,kIOMemoryMapperNone);
+    if(!first)return false;
+    const IOByteCount total=native_legacy_default_region->getLength();
+    for(IOByteCount offset=0;offset<total;) {
+        IOByteCount run=0;
+        const addr64_t base=native_legacy_default_region->getPhysicalSegment(offset,&run,kIOMemoryMapperNone);
+        if(!base || !run)return false;
+        if(first>=base && first<base+run)return true;
+        offset+=run;
+    }
+    return false;
+}
 static IOMemoryDescriptor *importRange(uint64_t address,size_t bytes,IODirection direction,void *task)
 {
     const IOOptionBits options=static_cast<IOOptionBits>(direction)|static_cast<IOOptionBits>(kIOMemoryMapperNone);
@@ -199,9 +218,10 @@ IOReturn NativeAdrenoMemory::importTask(void *task,uint64_t address,size_t bytes
         imported_=importRange(address,bytes,kIODirectionOut,task);
         if(!imported_)return kIOReturnNoMemory;
         status=imported_->prepare();
-        if(status==kIOReturnSuccess)read_only_=true;
+        if(status==kIOReturnSuccess)read_only_=!(bytes>=0x1000000 && insideDefaultRegion(imported_));
         /* uke: a GPU write into such an import is a context permission fault (UKE SMMU ... write); say which range took this path. */
-        IOLog("UKE ROIMPORT: addr=%llx bytes=%llx status=%x\n",(unsigned long long)address,(unsigned long long)bytes,status);
+        IOLog("UKE ROIMPORT: addr=%llx bytes=%llx status=%x %s\n",(unsigned long long)address,(unsigned long long)bytes,status,
+              read_only_?"read-only":"framebuffer, kept writable");
     }
     if(status!=kIOReturnSuccess) {imported_->release();imported_=nullptr;return status;}
     prepared_=true;bytes_=bytes;
