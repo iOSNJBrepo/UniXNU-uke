@@ -1090,6 +1090,10 @@ void publishMetal() {
     // The two keys the original _MTLRegisterDevices helper reads. The plugin name is ours: the bundle exists only through the
     // addon mount, and no Apple device identity (gpu,t8011 and the like) is claimed.
     accelerator->setProperty("MetalPluginName", "NativeAdrenoMetal");
+    // The render server, whose open of this accelerator's user client the kernel grants in place of the sandbox verdict
+    // (core patch zzw-native-adreno-sandbox-grant: one process name in this core's version). Without it backboardd's open is
+    // denied ("iokit-open-user-client AGXDeviceUserClient") and the plugin never gets a device.
+    accelerator->setProperty("NativeSandboxGrantProcess", "backboardd");
     accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
     gMetalStage = 4;
     if (!accelerator->attach(IOService::getPlatform())) {accelerator->release(); gMetalStatus = kIOReturnNotAttached; return;}
