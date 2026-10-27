@@ -498,6 +498,9 @@ extern unsigned int vm_page_free_count __attribute__((weak));
 extern unsigned int vm_page_wire_count __attribute__((weak));
 extern unsigned int vm_page_active_count __attribute__((weak));
 extern unsigned int vm_page_inactive_count __attribute__((weak));
+// ArmCpu (drivers/ArmCpu): SGIs it acknowledged without a handler.
+extern "C" volatile uint64_t armcpu_sgi_unexpected __attribute__((weak));
+extern "C" volatile uint32_t armcpu_sgi_unexpected_mask __attribute__((weak));
 }
 uint32_t rd32le(const uint8_t *p) {return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;}
 uint16_t rd16le(const uint8_t *p) {return uint16_t(p[0] | p[1] << 8);}
@@ -1420,7 +1423,13 @@ void heartbeat() {
     // Row 4 from now on: seconds since the run ended, GX state, and (only with GX on) the GPU status words, so a photo
     // tells a live kernel from a hung one and shows whether the GPU stays idle.
     char row[64];
+    uint64_t sgiSeen = 0;
     for (unsigned t = 0;; t += 2) {
+        // ArmCpu acknowledges SGIs this kernel never sends (INTID 7 after mode 8); report each new batch with the GPU time.
+        if (&armcpu_sgi_unexpected && &armcpu_sgi_unexpected_mask && armcpu_sgi_unexpected != sgiSeen) {
+            sgiSeen = armcpu_sgi_unexpected;
+            IOLog("UKE SGI: unexpected=%llu mask=%x at H%u gx=%d\n", (unsigned long long)sgiSeen, armcpu_sgi_unexpected_mask, t, gxOn());
+        }
         if (!(t % 10))
             IOLog("UKE MEM: free=%u wire=%u active=%u inactive=%u\n",
                   &vm_page_free_count ? vm_page_free_count : 0,
