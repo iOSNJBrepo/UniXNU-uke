@@ -1466,6 +1466,8 @@ void heartbeat() {
             snprintf(stall, sizeof stall, "S%x/%x/%x I%x P%x/%x f%x a%x/%x c%x", gpuRd(0x0211), gpuRd(0x0212),
                      gpuRd(0x0213), gpuRd(0x0823), gpuRd(0x0824), gpuRd(0x0a61), gpuFsr(), gActlr, gActlrSet, gSacr);
             setRow(3, stall);
+            // Rows 2 and 3 are drawn only; on uke the hang is read back from the userdata log, so they are mirrored there as well.
+            IOLog("UKE STALL: H%u %s\n", t, stall);
             // Row 2: each thread's SQE PC and the header of the packet it is on. a6xx_cp_hw_err_irq() reads CP_SQE_STAT_DATA after
             // selecting index 1 for the current opcode; index 0 is the PC and successive reads advance (crashdec).
             uint32_t sqe[4];
@@ -1473,6 +1475,7 @@ void heartbeat() {
             gpuWr(0x0a87, 0); sqe[2] = gpuRd(0x0a88); sqe[3] = gpuRd(0x0a88);
             snprintf(stall, sizeof stall, "Q br %x %08x bv %x %08x", sqe[0], sqe[1], sqe[2], sqe[3]);
             setRow(2, stall);
+            IOLog("UKE STALL: H%u %s\n", t, stall);
             // Once per hang, row 2 then shows instead the last submission's coherence sample (int-070), "C<submissions> c<first IB
             // word, kernel cacheable alias> u<DRAM before the CPU cache maintenance> v<DRAM after it> d<DRAM now>". int-069 found the
             // table entry right and DRAM holding the IB at hang time, yet the CP read a zero header: u=0 with c/v = 0x70970001 means
@@ -1486,6 +1489,7 @@ void heartbeat() {
                          native_adreno_coherence[1], native_adreno_coherence[2], native_adreno_coherence[3], uint32_t(w));
             }
             setRow(2, coherenceRow);
+            IOLog("UKE STALL: H%u %s\n", t, coherenceRow);
         } else if (gxOn()) {
             // Without a stall, row 2 shows the coherence samples, so a passing run still shows whether a CPU cache held an IB.
             if (native_adreno_coherence[0]) {
