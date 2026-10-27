@@ -266,6 +266,25 @@ jobs:
           key: uke-gpu-firmware-v1
           restore-keys: uke-gpu-firmware-
 
+      - name: Decode the GPU firmware from the repository secrets
+        if: inputs.defconfig == 'uke-gpu_defconfig' || inputs.defconfig == 'uke-gpu-userland_defconfig'
+        env:
+          UKE_GPU_FIRMWARE_B64_1: ${{ secrets.UKE_GPU_FIRMWARE_B64_1 }}
+          UKE_GPU_FIRMWARE_B64_2: ${{ secrets.UKE_GPU_FIRMWARE_B64_2 }}
+          UKE_GPU_FIRMWARE_B64_3: ${{ secrets.UKE_GPU_FIRMWARE_B64_3 }}
+        # The gen71100 files are vendor data from this unit (zap from /odm/firmware); board.toml pins them.
+        run: |
+          if [ -n "$UKE_GPU_FIRMWARE_B64_1" ]; then
+            mkdir -p UniXNU-uke/.cache/firmware/uke-gpu
+            printf '%s%s%s' "$UKE_GPU_FIRMWARE_B64_1" "$UKE_GPU_FIRMWARE_B64_2" "$UKE_GPU_FIRMWARE_B64_3" | base64 -d \
+              | tar -xzf - -C UniXNU-uke/.cache/firmware/uke-gpu
+            ( cd UniXNU-uke/.cache/firmware/uke-gpu && shasum -a 256 -c - ) <<'SUMS'
+          b6df660d109504dbea5a266910b037a33d893a11c6de52f524a5fd112008c401  gen71100_sqe.fw
+          435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864  gen71100_gmu.bin
+          73e07ec2192bd9e1dbd404324fd4226c31c68b0e03b4623cacced3369c32cd2b  gen71100_zap.mbn
+          SUMS
+          fi
+
       - name: Report the runner toolchain
         run: |
           sw_vers

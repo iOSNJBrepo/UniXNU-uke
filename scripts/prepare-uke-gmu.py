@@ -433,7 +433,7 @@ def derive(args):
             gmu=dict(name='gen71100_gmu.bin', bytes=80680,
                      sha256='435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864'),
             zap=dict(name='gen71100_zap.mbn', bytes=12088,
-                     sha256='1294992888e8c7c7fcd8a6d0a672cc666eff3c95e666ce5840db7e03edcc500d'),
+                     sha256='73e07ec2192bd9e1dbd404324fd4226c31c68b0e03b4623cacced3369c32cd2b'),
         ),
         provenance=dict(
             dt='live uke DT dump (private physical evidence, hashes only)',
