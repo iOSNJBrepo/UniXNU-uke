@@ -454,6 +454,17 @@ uint32_t gpuFsr() {
     if (bank0 + 0x60 > kSmmuWindow) return 0xdead;
     return *reinterpret_cast<volatile uint32_t *>(gSmmuMap->getVirtualAddress() + bank0 + 0x58);
 }
+// Context bank 0 fault syndrome: FAR (+0x60, 64-bit) and FSYNR0 (+0x68; bit 4 WNR = the faulting access was a write).
+bool gpuFault(uint64_t *far, uint32_t *fsynr0) {
+    const uint32_t id1 = native_gpu_context.id1;
+    if (!gSmmuMap || !id1) return false;
+    const size_t page = (id1 >> 31) ? 0x10000 : 0x1000, bank0 = page << (((id1 >> 28) & 7) + 1);
+    if (bank0 + 0x70 > kSmmuWindow) return false;
+    const uintptr_t base = gSmmuMap->getVirtualAddress() + bank0;
+    *far = *reinterpret_cast<volatile uint32_t *>(base + 0x60) | uint64_t(*reinterpret_cast<volatile uint32_t *>(base + 0x64)) << 32;
+    *fsynr0 = *reinterpret_cast<volatile uint32_t *>(base + 0x68);
+    return true;
+}
 void cpRow(const char *what) {
     // C<stage><what> R<RBBM_STATUS> I<INT_0_STATUS> F<CP_HW_FAULT> r<RPTR>/<WPTR> m<shadow rptr>/<fence> s<CB0 FSR>
     char row[64];
@@ -1443,6 +1454,16 @@ void heartbeat() {
         if (&armcpu_sgi_unexpected && &armcpu_sgi_unexpected_mask && armcpu_sgi_unexpected != sgiSeen) {
             sgiSeen = armcpu_sgi_unexpected;
             IOLog("UKE SGI: unexpected=%llu mask=%x at H%u gx=%d\n", (unsigned long long)sgiSeen, armcpu_sgi_unexpected_mask, t, gxOn());
+        }
+        // The Metal boots stop on a GPU context fault (FSR 0x80000408: permission fault, multiple): log where, whenever the FSR changes.
+        {
+            static uint32_t fsrSeen = 0x400;
+            const uint32_t fsr = gpuFsr();
+            uint64_t far = 0; uint32_t syn = 0;
+            if (fsr != fsrSeen && fsr != 0xdead && gpuFault(&far, &syn)) {
+                fsrSeen = fsr;
+                IOLog("UKE SMMU: H%u fsr=%x far=%llx fsynr0=%x %s\n", t, fsr, (unsigned long long)far, syn, (syn & 0x10) ? "write" : "read");
+            }
         }
         if (!(t % 10))
             IOLog("UKE MEM: free=%u wire=%u active=%u inactive=%u\n",
