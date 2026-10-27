@@ -5,6 +5,7 @@ extern "C" {volatile uint32_t native_adreno_trace_stage;}
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOLib.h>
+#include <string.h>
 #include <kern/task.h>
 
 static bool outputWidth(unsigned bits)
@@ -168,6 +169,7 @@ extern "C" {volatile uint32_t native_adreno_import_persistent[2];}
 /* uke: the display's default framebuffer region (LegacyDisplayProbe.cpp). The compositor's render surface lives in it and backboardd maps
  * that surface read-only, so its pin falls back to reading; the GPU is the one meant to write it, so such an import keeps write access. */
 extern "C" IOMemoryDescriptor *native_legacy_default_region __attribute__((weak));
+extern "C" void proc_selfname(char *,int) __attribute__((weak));
 static bool insideDefaultRegion(IOMemoryDescriptor *imported)
 {
     if(!&native_legacy_default_region || !native_legacy_default_region || !imported)return false;
@@ -218,7 +220,13 @@ IOReturn NativeAdrenoMemory::importTask(void *task,uint64_t address,size_t bytes
         imported_=importRange(address,bytes,kIODirectionOut,task);
         if(!imported_)return kIOReturnNoMemory;
         status=imported_->prepare();
-        if(status==kIOReturnSuccess)read_only_=!(bytes>=0x1000000 && insideDefaultRegion(imported_));
+        /* uke: the compositor renders into the display's default surface (0x1a13000 bytes plus a guard page), which reaches backboardd
+         * read-only; UKE ROMAP put the GPU's write faults inside that import. A framebuffer-sized range of the render server keeps write
+         * access (Core Animation renders only into IOSurfaces); smaller read-only ranges, and other processes, stay read-only. */
+        char opener[20]={};
+        if(&proc_selfname)proc_selfname(opener,sizeof opener);
+        const bool framebuffer=bytes>=0x1000000 && (insideDefaultRegion(imported_) || !strncmp(opener,"backboardd",sizeof opener));
+        if(status==kIOReturnSuccess)read_only_=!framebuffer;
         /* uke: a GPU write into such an import is a context permission fault (UKE SMMU ... write); say which range took this path. */
         IOLog("UKE ROIMPORT: addr=%llx bytes=%llx status=%x %s\n",(unsigned long long)address,(unsigned long long)bytes,status,
               read_only_?"read-only":"framebuffer, kept writable");
