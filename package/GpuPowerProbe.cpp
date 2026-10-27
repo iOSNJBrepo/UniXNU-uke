@@ -1066,6 +1066,16 @@ volatile int gMetalKext = -99, gMetalStatus = 0;
 // Stages: 1 kext load attempted, 2 parent metaclass found, 3 own class registered, 4 object created and initialised, 5 published.
 void publishMetal() {
     gMetalStage = 1;
+    // The plugin opens AGXDeviceUserClient on the published NativeAdrenoGpu service (NativeAdrenoPublish.cpp), and the kernel's grant
+    // reads NativeSandboxGrantProcess from the service being opened, so the render server is named there too (the Metal boot after
+    // 960ac84 still showed backboardd denied with only the accelerator carrying it).
+    if (OSDictionary *match = IOService::nameMatching("NativeAdrenoGpu")) {
+        if (IOService *published = IOService::copyMatchingService(match)) {
+            published->setProperty("NativeSandboxGrantProcess", "backboardd");
+            published->release();
+        }
+        match->release();
+    }
     if (!native_adreno_accelerator_static_init || !native_adreno_accelerator_allocate || !native_adreno_accelerator_instance_size) {
         gMetalStatus = kIOReturnUnsupported;
         return;
