@@ -1045,6 +1045,109 @@ int wrapperRound(IOService *svc, int &ok, int &n, IOReturn &err, int &errAt, uin
     uc->release();
     return matched;
 }
+// uke (ported from the sheng's GpuPowerProbe, 2026-10-28): without it every submission cleaned and invalidated every mapped BO,
+// imported IOSurfaces included, in NativeAdrenoVm::publishMapped; the kernel submit call grew from 3 to 19 ms over a few minutes.
+extern "C" vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, unsigned int flags);
+extern "C" void ml_io_unmap(vm_offset_t addr, vm_size_t size);
+// IO coherence (sheng-gpu-coherent, default 1), before any client: the A740 is ADRENO_QUIRK_HAS_CACHED_COHERENT behind the
+// dma-coherent GPU SMMU (a6xx_catalog.c, sm8550.dtsi), and Linux maps its cached BOs with IOMMU_CACHE (write-back, inner shareable).
+// A page of kernel memory is imported and mapped that way, and both directions are proved against DRAM:
+//   read:  the CPU stores new values over lines DRAM still holds old (counted dirty through an uncached mapping), the GPU copies the
+//          page, and the copy DRAM holds must be the new values, which only the CPU's caches had;
+//   write: the CPU keeps clean lines of a page it read, the GPU copies other values over it, and plain cached loads (no
+//          invalidate) must return the GPU's values.
+// Only both proofs turn native_adreno_io_coherent on; imported user memory is then mapped write-back inner-shareable and no longer
+// cleaned and invalidated around every submission (int-143: about 12 ms each, every imported IOSurface page every time).
+// Row: H d<dirty lines of 64> r<GPU read new>/<old> w<CPU saw GPU>/<DRAM> s<status> -> on/off/skip
+extern "C" volatile uint32_t native_adreno_io_coherent __attribute__((weak));
+extern "C" {char native_gpu_coherence_row[120]; uint32_t native_gpu_coherence[8];}
+bool dramPage(uint64_t pa, uint32_t *out) {
+    const vm_offset_t page = ml_io_map_unmappable(vm_offset_t(pa), 0x1000, 0x7 /* VM_WIMG_IO */);
+    if (!page) return false;
+    for (unsigned i = 0; i < 1024; ++i) out[i] = reinterpret_cast<const volatile uint32_t *>(page)[i];
+    ml_io_unmap(page, 0x1000);
+    return true;
+}
+bool gpuCopyPage(uint64_t src, uint64_t dst) {
+    uint32_t words[8] = {};
+    if (AdrenoPM4Type7(0x75, 5, &words[0]) != AdrenoPM4Success || AdrenoPM4Type7(0x12, 0, &words[6]) != AdrenoPM4Success) return false;
+    words[1] = 1024; words[2] = uint32_t(src); words[3] = uint32_t(src >> 32); words[4] = uint32_t(dst); words[5] = uint32_t(dst >> 32);
+    return cpFence(words, 7);
+}
+unsigned gCoherenceAttempts;
+void coherenceProbe(NativeAdrenoVm *vm) {
+    uint32_t *k = native_gpu_coherence;
+    unsigned wanted = 1;
+    PE_parse_boot_argn("sheng-gpu-coherent", &wanted, sizeof wanted);
+    if (!wanted || !vm || !&native_adreno_io_coherent) {
+        snprintf(native_gpu_coherence_row, sizeof native_gpu_coherence_row, "H skip (arg %u vm %d)", wanted, vm != nullptr);
+        IOLog("UKE COHERENT: %s\n", native_gpu_coherence_row);
+        return;
+    }
+    constexpr uint64_t kIova = 0x18000000;
+    constexpr size_t kBytes = 4 * 4096;
+    uint8_t *buf = static_cast<uint8_t *>(IOMallocAligned(kBytes, 4096));
+    NativeAdrenoMemory mem;
+    uint64_t handle = 0;
+    IOReturn st = buf ? mem.importTask(kernel_task, uint64_t(uintptr_t(buf)), kBytes, 40, kBytes) : kIOReturnNoMemory;
+    k[0] = 1;
+    if (!st) {k[0] = 2; st = vm->map(&mem, 0, kIova, 3, 1, 3, &handle);}
+    uint64_t phys[4] = {};
+    for (size_t j = 0; !st && j < mem.spanCount(); ++j)
+        for (size_t at = 0; at < mem.spans()[j].bytes; at += 4096) phys[(mem.spans()[j].offset + at) / 4096] = mem.spans()[j].physical + at;
+    static uint32_t words[1024];
+    bool pass = false;
+    if (!st && phys[0] && phys[1] && phys[2] && phys[3]) {
+        k[0] = 3;
+        volatile uint32_t *S = reinterpret_cast<volatile uint32_t *>(buf), *D = S + 1024, *R = S + 2048, *T = S + 3072;
+        // read direction. The proof needs S's new words still dirty in a CPU cache (DRAM still holding the old ones, k[1] >= 48 of 64
+        // lines) when the GPU copies S. int-150 found every line already written back once (d0/64) while both directions were right
+        // (r1024/0 w1024/1024): the precondition, not the snoop, had failed, and the whole boot ran with per-submission maintenance.
+        // So the setup repeats until the lines are seen dirty, up to eight times (attempts in the row), and only then does the GPU copy.
+        bool dirty = false;
+        for (unsigned attempt = 0; attempt < 8 && !st && !dirty; ++attempt) {
+            gCoherenceAttempts = attempt + 1;
+            for (unsigned i = 0; i < 1024; ++i) {S[i] = 0x11110000u | i; D[i] = 0; R[i] = 0x33330000u | i; T[i] = 0x44440000u | i;}
+            st = NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
+            for (unsigned i = 0; i < 1024; ++i) S[i] = 0x22220000u | i;
+            __asm__ volatile("dsb sy" ::: "memory");
+            k[1] = 0;
+            if (!st && dramPage(phys[0], words)) for (unsigned i = 0; i < 1024; i += 16) k[1] += words[i] == (0x11110000u | i);
+            dirty = k[1] >= 48;
+        }
+        if (!st && dirty) {
+            k[0] = 4;
+            if (gpuCopyPage(kIova, kIova + 4096) && dramPage(phys[1], words)) {
+                k[0] = 5;
+                for (unsigned i = 0; i < 1024; ++i) {k[2] += words[i] == (0x22220000u | i); k[3] += words[i] == (0x11110000u | i);}
+            }
+        }
+        // write direction: T written back and kept (clean, resident), then read so its lines are present when the GPU writes
+        if (!st && k[0] == 5) st = NativeAdrenoMaintainOwnedPages(const_cast<uint32_t *>(T), 4096, NativeAdrenoClean);
+        uint32_t touch = 0;
+        for (unsigned i = 0; i < 1024; ++i) touch += T[i];
+        __asm__ volatile("dsb sy" ::: "memory");
+        if (!st && k[0] == 5 && gpuCopyPage(kIova + 8192, kIova + 12288)) {
+            k[0] = 6;
+            for (unsigned i = 0; i < 1024; ++i) k[4] += T[i] == (0x33330000u | i);
+            if (dramPage(phys[3], words)) for (unsigned i = 0; i < 1024; ++i) k[5] += words[i] == (0x33330000u | i);
+        }
+        (void)touch;   /* the loads are volatile; the sum only keeps them one expression */
+        pass = k[0] == 6 && k[1] >= 48 && k[2] == 1024 && k[4] == 1024 && k[5] == 1024;
+    }
+    k[6] = uint32_t(st);
+    if (handle) (void)vm->unmap(handle);
+    // Whatever the result, no line of these pages stays in a CPU cache (a stale clean copy would outlive the free).
+    if (buf) (void)NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
+    (void)mem.release();
+    if (buf) IOFreeAligned(buf, kBytes);
+    k[7] = pass;
+    native_adreno_io_coherent = pass ? 1 : 0;
+    snprintf(native_gpu_coherence_row, sizeof native_gpu_coherence_row, "H d%u/64 a%u r%u/%u w%u/%u s%x k%u -> %s", k[1], gCoherenceAttempts,
+             k[2], k[3], k[4], k[5], k[6], k[0], pass ? "on" : "off");
+    // uke: no diagnostic page; the result is read back from the userdata log.
+    IOLog("UKE COHERENT: %s\n", native_gpu_coherence_row);
+}
 void publishAndWrapperTest(bool rounds) {
     char row[64];
     if (!native_adreno_publish || !native_adreno_published_service || !native_adreno_publish_stats) {setRow(5, "P nolink"); return;}
@@ -1053,6 +1156,7 @@ void publishAndWrapperTest(bool rounds) {
     // userClientTest attaches the submit object; with the self-tests skipped it still has to be attached before a client opens.
     if (vm) gSubmit.attach(vm, &gRing);
     native_adreno_dram_read32 = dramRead32;
+    coherenceProbe(vm);
     const IOReturn timer = gTimer.attach(&gTimerIo, NativeAdrenoTimeCp);
     const IOReturn published = native_adreno_publish(vm, &gSubmit, &gRing, &clock, timer ? nullptr : &gTimer, &gDeviceInfo, 31, 40);
     IOService *svc = published ? nullptr : native_adreno_published_service();
