@@ -19,6 +19,7 @@ volatile uint64_t native_gop_wait_stats[7];
 /* uke: the GPU hand-off's frame timing in mach ticks: [0] offer-to-complete total, [1] its longest, [2] offer-to-delivery (the client picked it
  * up and its mapping was made) total, [3] delivery-to-complete total. Logged by GpuPowerProbe as UKE PRESENT. */
 volatile uint64_t native_gop_frame_ticks[4];
+volatile uint64_t native_gop_map_cache[2];   /* uke: client mappings handed out again, made new */
 static uint64_t gOfferedAt,gDeliveredAt;
 IOService *native_gop_presenter_create(void);
 bool native_gop_gpu_offer(IOService *,void *display,IOMemoryDescriptor *,uint64_t stride,uint32_t width,uint32_t height);
@@ -42,6 +43,16 @@ class NativeGOPPresenter : public IOService {
     bool gpuMode=false,gpuClient=false;
     struct {bool offered,delivered;uint64_t sequence;void *display;IOMemoryDescriptor *memory;IOMemoryMap *map;
             uint64_t stride;uint32_t width,height;} swap={};
+    /* uke: the compositor cycles through two or three surfaces, and mapping a 27 MB one into the client for every frame (then the client's
+     * GPU import of it) cost most of the 19 ms a frame took (UKE PRESENT, 2026-10-28). The client's mapping of each recent surface is kept
+     * and handed out again, with a non-zero id (NGPSwap.reserved) that is new for every mapping made, so the client can keep its import of
+     * it as long as the id comes back. Entries are dropped oldest first, and all of them when the client goes away. */
+    struct MapEntry {IOMemoryDescriptor *memory;task_t task;IOMemoryMap *map;uint32_t id;uint64_t used;};
+    MapEntry mapCache[3]={};
+    uint32_t mapIds=0;uint64_t mapUses=0;
+    void flushMapCache() {
+        for(auto &e: mapCache) {OSSafeReleaseNULL(e.map);if(e.memory)e.memory->release();e={};}
+    }
     uint64_t swapSequence=0;
     IOReturn waitSwap(task_t,uint64_t timeoutMs,NGPSwap *);
     IOReturn completeSwap(uint64_t sequence,int status);
@@ -107,6 +118,7 @@ void NativeGOPPresenter::stop(IOService *provider) {
     IOService::stop(provider);
 }
 void NativeGOPPresenter::free() {
+    flushMapCache();
     OSSafeReleaseNULL(mapping);if(gate){IOLockFree(gate);gate=nullptr;}IOService::free();
 }
 IOReturn NativeGOPPresenter::transfer(task_t task,const NGPPresent &q,NGPTransfer *result) {
@@ -170,15 +182,37 @@ IOReturn NativeGOPPresenter::waitSwap(task_t task,uint64_t timeoutMs,NGPSwap *ou
     const uint64_t sequence=swap.sequence,stride=swap.stride;const uint32_t width=swap.width,height=swap.height;
     IOLockUnlock(gate);
     // The frame's pages go into the client's task here, writable like any import (the GPU maps them for reading; the kernel pins and maintains them).
-    IOMemoryMap *map=memory->createMappingInTask(task,0,kIOMapAnywhere);
-    memory->release();
+    // A surface mapped for this client before is handed out again (mapCache): the swap holds its own reference either way.
+    IOMemoryMap *map=nullptr;uint32_t mapId=0;
+    IOLockLock(gate);
+    for(auto &e: mapCache)if(e.map && e.memory==memory && e.task==task) {map=e.map;map->retain();mapId=e.id;e.used=++mapUses;break;}
+    IOLockUnlock(gate);
+    if(map) {
+        memory->release();
+        native_gop_map_cache[0]=native_gop_map_cache[0]+1;
+    } else {
+        map=memory->createMappingInTask(task,0,kIOMapAnywhere);
+        native_gop_map_cache[1]=native_gop_map_cache[1]+1;
+        if(map && map->getVirtualAddress()) {
+            IOLockLock(gate);
+            MapEntry *slot=&mapCache[0];
+            for(auto &e: mapCache) {if(!e.map){slot=&e;break;}if(e.used<slot->used)slot=&e;}
+            MapEntry old=*slot;
+            mapId=++mapIds?mapIds:++mapIds;
+            map->retain();*slot={memory,task,map,mapId,++mapUses};   // the cache keeps the swap's memory reference
+            IOLockUnlock(gate);
+            OSSafeReleaseNULL(old.map);if(old.memory)old.memory->release();
+        } else {
+            memory->release();
+        }
+    }
     IOLockLock(gate);
     if(!map || !map->getVirtualAddress() || !swap.offered || swap.sequence!=sequence) {
         IOLockUnlock(gate);OSSafeReleaseNULL(map);__atomic_fetch_add(&native_gop_gpu_failures,1,__ATOMIC_RELAXED);return kIOReturnNoMemory;
     }
     swap.map=map;
     out->sequence=sequence;out->address=map->getVirtualAddress();out->bytes=map->getLength();out->stride=stride;
-    out->width=width;out->height=height;out->format=NGP_BGRX8888;out->reserved=0;
+    out->width=width;out->height=height;out->format=NGP_BGRX8888;out->reserved=mapId;
     gDeliveredAt=mach_absolute_time();native_gop_frame_ticks[2]=native_gop_frame_ticks[2]+(gDeliveredAt-gOfferedAt);
     IOLockUnlock(gate);return kIOReturnSuccess;
 }
@@ -203,7 +237,10 @@ void NativeGOPPresenter::abandonSwap() {
     IOLockLock(gate);
     gpuClient=false;
     auto done=swap;swap={};
+    MapEntry cached[3];memcpy(cached,mapCache,sizeof(cached));memset(mapCache,0,sizeof(mapCache));
     IOLockUnlock(gate);
+    // The client is gone: its mappings of the surfaces go with it.
+    for(auto &e: cached) {OSSafeReleaseNULL(e.map);if(e.memory)e.memory->release();}
     if(!done.offered)return;
     OSSafeReleaseNULL(done.map);if(done.memory)done.memory->release();
     __atomic_fetch_add(&native_gop_gpu_abandoned,1,__ATOMIC_RELAXED);

@@ -517,6 +517,7 @@ extern "C" unsigned ShengGmuPerfVote(unsigned, unsigned *) __attribute__((weak))
 extern "C" volatile uint64_t native_adreno_submit_phase[6] __attribute__((weak));
 extern "C" volatile uint64_t native_gop_gpu_offers __attribute__((weak)), native_gop_gpu_completions __attribute__((weak));
 extern "C" volatile uint64_t native_gop_frame_ticks[4] __attribute__((weak)), native_legacy_base_skipped __attribute__((weak));
+extern "C" volatile uint64_t native_gop_map_cache[2] __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_mib __attribute__((weak)), native_adreno_pool_status __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak));
 extern "C" volatile uint32_t native_data_persist_state __attribute__((weak)), native_data_persist_header __attribute__((weak));
@@ -1599,6 +1600,8 @@ void heartbeat() {
             uint64_t us[4] = {};
             for (unsigned i = 0; i < 4; ++i) {absolutetime_to_nanoseconds(native_gop_frame_ticks[i], &us[i]); us[i] /= 1000;}
             const uint64_t n = native_gop_gpu_completions;
+            IOLog("UKE PRESENT: H%u maps reused=%llu new=%llu\n", t, &native_gop_map_cache ? (unsigned long long)native_gop_map_cache[0] : 0ull,
+                  &native_gop_map_cache ? (unsigned long long)native_gop_map_cache[1] : 0ull);
             IOLog("UKE PRESENT: H%u offered=%llu done=%llu dropped=%llu us/frame total=%llu max=%llu pickup=%llu copy=%llu\n", t,
                   &native_gop_gpu_offers ? (unsigned long long)native_gop_gpu_offers : 0ull, (unsigned long long)n,
                   &native_legacy_base_skipped ? (unsigned long long)native_legacy_base_skipped : 0ull, (unsigned long long)(us[0] / n),
