@@ -276,6 +276,13 @@ __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status,c
         boot_progress_stage(message);
     }
 }
+// The display refresh tick (NativeLegacyDisplay, sheng-vsync): vsync messages armed, sent, idle stops, late ticks, starts, refresh
+// properties reported at that rate; logged by GpuPowerProbe as UKE VSYNC.
+extern "C" {volatile uint64_t native_legacy_vsync_events[6];volatile uint32_t native_legacy_vsync_hz;}
+extern "C" void native_legacy_vsync_observed(unsigned event,unsigned hz) {
+    if(event<6)native_legacy_vsync_events[event]=native_legacy_vsync_events[event]+1;
+    native_legacy_vsync_hz=hz;
+}
 bool native_legacy_gpu_offer(void *display,IOMemoryDescriptor *memory,uint64_t stride,uint32_t width,uint32_t height) {
     const bool accepted=gpuHandoffPresenter && native_gop_gpu_offer(gpuHandoffPresenter,display,memory,stride,width,height);
     // A frame the GPU takes is a frame on the panel too: without this the text console kept drawing over the GPU's frames.

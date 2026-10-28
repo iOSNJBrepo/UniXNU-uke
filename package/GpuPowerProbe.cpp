@@ -518,6 +518,8 @@ extern "C" volatile uint64_t native_adreno_submit_phase[6] __attribute__((weak))
 extern "C" volatile uint64_t native_gop_gpu_offers __attribute__((weak)), native_gop_gpu_completions __attribute__((weak));
 extern "C" volatile uint64_t native_gop_frame_ticks[4] __attribute__((weak)), native_legacy_base_skipped __attribute__((weak));
 extern "C" volatile uint64_t native_gop_map_cache[2] __attribute__((weak));
+extern "C" volatile uint64_t native_legacy_vsync_events[6] __attribute__((weak));
+extern "C" volatile uint32_t native_legacy_vsync_hz __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_mib __attribute__((weak)), native_adreno_pool_status __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak));
 extern "C" volatile uint32_t native_data_persist_state __attribute__((weak)), native_data_persist_header __attribute__((weak));
@@ -1595,6 +1597,12 @@ void heartbeat() {
                   &native_data_persist_loaded ? (unsigned long long)native_data_persist_loaded : 0ull,
                   &native_data_persist_writes ? (unsigned long long)native_data_persist_writes : 0ull,
                   &native_data_persist_errors ? (unsigned long long)native_data_persist_errors : 0ull);
+        if (t && !(t % 20) && &native_legacy_vsync_events)
+            IOLog("UKE VSYNC: H%u hz=%u armed=%llu sent=%llu idle=%llu late=%llu start=%llu refresh=%llu\n", t,
+                  &native_legacy_vsync_hz ? native_legacy_vsync_hz : 0u, (unsigned long long)native_legacy_vsync_events[0],
+                  (unsigned long long)native_legacy_vsync_events[1], (unsigned long long)native_legacy_vsync_events[2],
+                  (unsigned long long)native_legacy_vsync_events[3], (unsigned long long)native_legacy_vsync_events[4],
+                  (unsigned long long)native_legacy_vsync_events[5]);
         // The GPU hand-off of the compositor's frames: offered, copied, dropped while busy, and offer-to-complete time.
         if (t && !(t % 20) && &native_gop_frame_ticks && &native_gop_gpu_completions && native_gop_gpu_completions) {
             uint64_t us[4] = {};
