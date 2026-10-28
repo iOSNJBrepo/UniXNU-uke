@@ -514,6 +514,7 @@ extern "C" volatile uint64_t armcpu_sgi_unexpected __attribute__((weak));
 extern "C" volatile uint32_t armcpu_sgi_unexpected_mask __attribute__((weak));
 extern "C" char native_adreno_metal_rows[48][96] __attribute__((weak));
 extern "C" unsigned ShengGmuPerfVote(unsigned, unsigned *) __attribute__((weak));
+extern "C" volatile uint64_t native_adreno_submit_phase[6] __attribute__((weak));
 extern "C" volatile uint32_t native_data_persist_state __attribute__((weak)), native_data_persist_header __attribute__((weak));
 extern "C" volatile uint64_t native_data_persist_loaded __attribute__((weak)), native_data_persist_writes __attribute__((weak)),
     native_data_persist_errors __attribute__((weak));
@@ -1584,6 +1585,15 @@ void heartbeat() {
                   &native_data_persist_loaded ? (unsigned long long)native_data_persist_loaded : 0ull,
                   &native_data_persist_writes ? (unsigned long long)native_data_persist_writes : 0ull,
                   &native_data_persist_errors ? (unsigned long long)native_data_persist_errors : 0ull);
+        // Where kernel submissions spend their time (NativeAdrenoSubmit.cpp), microseconds per submission.
+        if (t && !(t % 60) && &native_adreno_submit_phase && native_adreno_submit_phase[0]) {
+            uint64_t us[6] = {};
+            for (unsigned i = 1; i < 6; ++i) {absolutetime_to_nanoseconds(native_adreno_submit_phase[i], &us[i]); us[i] /= 1000;}
+            const uint64_t n = native_adreno_submit_phase[0];
+            IOLog("UKE SUBMIT: H%u n=%llu us/submit validate=%llu wc=%llu publish=%llu tlb=%llu ring=%llu\n", t, (unsigned long long)n,
+                  (unsigned long long)(us[1] / n), (unsigned long long)(us[2] / n), (unsigned long long)(us[3] / n),
+                  (unsigned long long)(us[4] / n), (unsigned long long)(us[5] / n));
+        }
         if (t && !(t % 60) && &native_adreno_metal_rows && &native_adreno_metal_rows_seq) {
             static uint32_t tableSeen;
             if (native_adreno_metal_rows_seq != tableSeen) {

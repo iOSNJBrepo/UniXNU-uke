@@ -72,12 +72,19 @@ size_t NativeAdrenoSubmit::outstanding() const
 {
     size_t count=0;for(const auto &job:jobs_)if(job.active)++count;return count;
 }
+/* uke: where a kernel submission spends its time, in mach ticks: [0] submissions, then validation, the write-combine re-assertion
+ * and audit, the publication of mapped BOs (with its coherence samples), the TLB invalidation and the ring write. Logged by
+ * GpuPowerProbe's heartbeat as UKE SUBMIT. */
+extern "C" {volatile uint64_t native_adreno_submit_phase[6];}
+extern "C" uint64_t mach_absolute_time(void);
 IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers,size_t count,
     uint32_t queue,uint32_t *fence)
 {
     if(!fence)return kIOReturnBadArgument;*fence=0;
     if(!attached_ || poisoned_)return kIOReturnNotReady;
     if(!buffers || !count || count>SubmitMaxBuffers)return kIOReturnBadArgument;
+    uint64_t lap=mach_absolute_time();
+    auto phase=[&lap](unsigned index) {const uint64_t now=mach_absolute_time();native_adreno_submit_phase[index]+=now-lap;lap=now;};
     /* Every buffer is validated against the live VM before any reference. */
     uint64_t handles[SubmitMaxBuffers];size_t handle_count=0;
     uint32_t words[SubmitMaxBuffers*(1+SubmitIbWords)];size_t word_count=0;
@@ -117,6 +124,7 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers,size
     /* int-070: the first IB word as the kernel's cacheable alias and DRAM see it before any maintenance, then DRAM after the CPU
      * caches over every mapped BO are cleaned and invalidated. The board shows the last submission's record on a stall. */
     uint32_t cached=~0u,before=~0u,ignored=0,after=~0u;
+    phase(1);
     /* Write-combined stores this CPU made before the call (the client's command words) complete before anything below. */
     __asm__ volatile("dsb sy":::"memory");
     /* int-098/099: with write-combined user BOs and no maintenance the CP stopped at the end of the first IB, as in int-065..069 when an
@@ -151,6 +159,7 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers,size
             native_adreno_wc_distrusted=native_adreno_coherence[0]+1;
         }
     }
+    phase(2);
     (void)vm_->sampleWord(buffers[0].iova,&cached,&before);
     IOReturn status=vm_->publishMapped();
     if(!status) {
@@ -163,7 +172,9 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers,size
             }
             native_adreno_coherence[4]=native_adreno_coherence[4]+1;
         }
+        phase(3);
         status=vm_->invalidateTlb();
+        phase(4);
     }
     if(status) {
         for(size_t i=0;i<handle_count;++i) {vm_->retireJobAfterCompletion(handles[i]);++stats_.references_retired;}
@@ -190,6 +201,8 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers,size
         while(handle_count) {vm_->retireJobAfterCompletion(handles[--handle_count]);++stats_.references_retired;}
         return status;
     }
+    phase(5);
+    native_adreno_submit_phase[0]=native_adreno_submit_phase[0]+1;
     for(size_t i=0;i<handle_count;++i)job->handles[i]=handles[i];
     job->count=handle_count;job->fence=value;job->queue=queue;job->active=true;
     ++stats_.submissions;
