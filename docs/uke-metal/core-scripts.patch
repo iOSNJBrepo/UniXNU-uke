@@ -1,0 +1,65 @@
+diff --git a/scripts/add-gpu-plugin-data.py b/scripts/add-gpu-plugin-data.py
+index 489615a..5babe31 100644
+--- a/scripts/add-gpu-plugin-data.py
++++ b/scripts/add-gpu-plugin-data.py
+@@ -108,7 +108,7 @@ def main():
+             print('staged', target.relative_to(mount), sorted(p.name for p in target.iterdir()))
+         finally:
+             subprocess.run(['hdiutil', 'detach', device], check=True)
+-        if raw.read_bytes()[32:36] != b'NXSB':
++        if raw.open('rb').read(4096)[32:36] != b'NXSB':
+             sys.exit('The edited image is no APFS container any more')
+         metadata = packed_ramdisk.pack(raw, output)
+     report = dict(base_sha256=packed_ramdisk.inspect(base)[0]['sha256'], output=metadata, publish=publish, clients=clients,
+diff --git a/scripts/check-turnip-darwin-host.py b/scripts/check-turnip-darwin-host.py
+index 6deaed9..4837c60 100644
+--- a/scripts/check-turnip-darwin-host.py
++++ b/scripts/check-turnip-darwin-host.py
+@@ -21,7 +21,7 @@ if not library.exists():
+     sys.exit('Build the host Turnip first: python3 scripts/build-turnip-darwin.py --target host')
+ 
+ includes = out / 'host-include'
+-for name in ['IOKit/IOTypes.h', 'IOKit/IOReturn.h', 'IOKit/IOBufferMemoryDescriptor.h', 'IOKit/IOLib.h', 'kern/task.h']:
++for name in ['IOKit/IOTypes.h', 'IOKit/IOReturn.h', 'IOKit/IOBufferMemoryDescriptor.h', 'IOKit/IODeviceMemory.h', 'IOKit/IOLib.h', 'kern/task.h']:
+     path = includes / name
+     path.parent.mkdir(parents=True, exist_ok=True)
+     path.write_text('#include "XnuMemoryFixture.h"\n')
+@@ -40,7 +40,7 @@ subprocess.run(['xcrun', 'clang++', '-std=c++23', '-O1', '-fPIC', '-I', includes
+                 '-I', ROOT / 'kits/AdrenoPM4', '-c', sim / 'host_gpu_service.cpp', '-o', service], check=True)
+ core = []
+ for name in ['NativeAdrenoMemory', 'NativeAdrenoSmmuMemory', 'NativeAdrenoVm', 'NativeAdrenoRing', 'NativeAdrenoSubmit',
+-             'NativeAdrenoUserClient', 'NativeAdrenoTimer', 'NativeAdrenoSmmuContext', 'NativeAdrenoGpuContext']:
++             'NativeAdrenoUserClient', 'NativeAdrenoTimer', 'NativeAdrenoSmmuContext', 'NativeAdrenoGpuContext', 'NativeAdrenoProfile']:
+     obj = out / (name + '.o')
+     subprocess.run(['xcrun', 'clang++', '-std=c++23', '-O1', '-fPIC', '-I', includes, '-I', sim.parent, '-I', kit, '-I', smmu,
+                     '-I', ROOT / 'kits/AdrenoPM4', '-c', kit / (name + '.cpp'), '-o', obj], check=True)
+@@ -89,9 +89,13 @@ for mode in ['normal', 'busy', 'fence-error', 'free-error', 'lease-error', 'view
+ subprocess.run([sys.executable, ROOT / 'scripts/check-turnip-pipeline-cache-host.py'], check=True)
+ # Original UI recipes additionally cover graphics-library caches, strict driver
+ # feedback and genuine UUID/empty-cache refusals. The software peer runs no shader.
+-with tempfile.TemporaryDirectory(prefix='quartzcore-driver-cache-', dir=out) as temporary:
+-    subprocess.run([sys.executable, ROOT / 'scripts/check-quartzcore-turnip-cache-host.py',
+-                    '--output', Path(temporary) / 'control'], check=True, timeout=660)
++# The QuartzCore recipe check lives in the newer core layout (drivers/AdrenoMetal); this core does not carry it.
++if (ROOT / 'scripts/check-quartzcore-turnip-cache-host.py').exists():
++    with tempfile.TemporaryDirectory(prefix='quartzcore-driver-cache-', dir=out) as temporary:
++        subprocess.run([sys.executable, ROOT / 'scripts/check-quartzcore-turnip-cache-host.py',
++                        '--output', Path(temporary) / 'control'], check=True, timeout=660)
++else:
++    print('SKIP: QuartzCore recipe cache check (script not in this core)')
+ 
+ with tempfile.TemporaryDirectory(prefix='priming-driver-cache-', dir=out) as temporary:
+     subprocess.run([sys.executable, ROOT / 'scripts/check-priming-cache-host.py',
+diff --git a/scripts/seed-data-skip-setup.py b/scripts/seed-data-skip-setup.py
+index c878520..5175b83 100755
+--- a/scripts/seed-data-skip-setup.py
++++ b/scripts/seed-data-skip-setup.py
+@@ -80,7 +80,7 @@ def main():
+                     print('mkdir', d.relative_to(mount))
+         finally:
+             subprocess.run(['hdiutil', 'detach', device], check=True)
+-        if raw.read_bytes()[32:36] != b'NXSB':
++        if raw.open('rb').read(4096)[32:36] != b'NXSB':
+             sys.exit('The edited image is no APFS container any more')
+         metadata = packed_ramdisk.pack(raw, output)
+     report = dict(base_sha256=packed_ramdisk.inspect(base)[0]['sha256'], output=metadata,

@@ -1,0 +1,15 @@
+diff --git a/NativeAdrenoMetalPlugin.mm b/NativeAdrenoMetalPlugin.mm
+index 1571b46..3356c66 100644
+--- a/NativeAdrenoMetalPlugin.mm
++++ b/NativeAdrenoMetalPlugin.mm
+@@ -225,6 +225,10 @@ static id deviceForPort(unsigned port) {
+         }
+         // The render server compresses its framebuffer (an Apple/AGX layout this GPU does not write) unless told not to; the display driver takes plain rows.
+         setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
++        // uke (A732): the BV thread hung inside a binning CP_DRAW_INDX_OFFSET while BR waited at CP_THREAD_CONTROL (UKE STALL rows,
++        // 2026-10-27), also with nocb: Turnip runs every visibility pass on BV, nocb only stops it running ahead. Render to system memory
++        // (no binning pass, BR only) until the BV path is understood.
++        setenv("TU_DEBUG", "nocb,sysmem", 1);
+         // The runtime's creation log reports each VkPipeline making's time to the device's sink, which the telemetry's V row sums.
+         setenv("METAL2VULKAN_LOG_PIPELINES", "1", 0);
+         CFPreferencesSetAppValue(CFSTR("CAEnableFramebufferCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
