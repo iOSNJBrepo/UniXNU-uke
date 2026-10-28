@@ -44,3 +44,9 @@ sheng-gpu-metal=1 sheng-fb-gpu=1 sheng-gpu-addon=1`, `--owner-trust-cache` with 
   Turnip's Darwin backend waited on the CPU, under `submit_mutex`, for every wait sync's fence to complete before submitting.
   With one in-order ring a sync already fenced on it needs no wait. Metal telemetry (`UKE MTL` rows, fork 838d1f9):
   commit-to-complete mean 74 -> 38 ms, commit-to-scheduled ~97 -> 5-14 ms. The user saw it more fluid with no drawing faults.
+- Shader cache that survives reboots (`native-metal-plugin.patch`): the plugin picked the user temp directory
+  (`/var/mobile/tmp/com.apple.backboardd/m2v`, emptied at every boot), because confstr gives no user cache directory and
+  `Library/Caches/com.apple.backboardd` did not exist. It now creates that directory and uses it first; a `DC` telemetry row
+  lists why each candidate was passed over. Second boot on the same seed: Vulkan pipeline cache hit 110 / miss 6 at 60 s,
+  VkPipeline time 394 ms instead of ~3.4-4.2 s. The cache only carries over while the Data seed is unchanged (a new plugin
+  or seed starts the Data disk over). `UKE DATA` (fork 14c7f85) logs the store state: 2 resumed, 3 started over.

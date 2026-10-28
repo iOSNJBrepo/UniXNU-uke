@@ -1,8 +1,16 @@
 diff --git a/NativeAdrenoMetalPlugin.mm b/NativeAdrenoMetalPlugin.mm
-index 1571b46..3356c66 100644
+index 1571b46..da9886e 100644
 --- a/NativeAdrenoMetalPlugin.mm
 +++ b/NativeAdrenoMetalPlugin.mm
-@@ -225,6 +225,10 @@ static id deviceForPort(unsigned port) {
+@@ -60,6 +60,7 @@ static bool requested() {
+     return gpu;
+ }
+ static std::string gCacheDirectory;   // the runtime's cache directory (the one that opened the device), exported by CacheExport.h
++static char gCandidateRow[90];        // uke: which shader-cache directories were tried and why each was passed over
+ // Progress markers 0x68xx (GPU6): 6800 entered, 6801 Turnip found, 6802 device made, 6803 returned to the discovery, 68f1 no Turnip, 68f2 no device.
+ static unsigned gDiagBits;
+ // Reads of the render server's own state for the framebuffer-format question (diagnostic only, for the exact QuartzCore of the target image; a read
+@@ -225,20 +226,35 @@ static id deviceForPort(unsigned port) {
          }
          // The render server compresses its framebuffer (an Apple/AGX layout this GPU does not write) unless told not to; the display driver takes plain rows.
          setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
@@ -13,3 +21,88 @@ index 1571b46..3356c66 100644
          // The runtime's creation log reports each VkPipeline making's time to the device's sink, which the telemetry's V row sums.
          setenv("METAL2VULKAN_LOG_PIPELINES", "1", 0);
          CFPreferencesSetAppValue(CFSTR("CAEnableFramebufferCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
+         CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
+-        char candidates[4][512] = {};
++        // uke: the user temp directory (/var/mobile/tmp/com.apple.backboardd) is emptied at every boot, so a cache there missed every
++        // pipeline on every boot although the Data disk resumed (2026-10-28). Persistent directories come first; gCandidateRow records
++        // why each one was passed over (c: no path, m<errno>: mkdir, a<errno>: not writable, o: the runtime refused it).
++        char candidates[6][512] = {};
+         if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16)) candidates[0][0] = 0;
+-        if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16)) candidates[1][0] = 0;
+-        strlcpy(candidates[2], "/tmp/", sizeof candidates[2]);
+-        strlcpy(candidates[3], "/private/var/tmp/", sizeof candidates[3]);
+-        for (unsigned i = 0; i < 4 && !device; ++i) {
+-            if (!candidates[i][0]) continue;
++        strlcpy(candidates[1], "/var/mobile/Library/Caches/com.apple.backboardd/", sizeof candidates[1]);
++        strlcpy(candidates[2], "/var/mobile/Library/Caches/", sizeof candidates[2]);
++        if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[3], sizeof candidates[3] - 16)) candidates[3][0] = 0;
++        strlcpy(candidates[4], "/tmp/", sizeof candidates[4]);
++        strlcpy(candidates[5], "/private/var/tmp/", sizeof candidates[5]);
++        size_t noted = (size_t)snprintf(gCandidateRow, sizeof gCandidateRow, "DC");
++        auto note = [&](unsigned i, const char *what, int code) {
++            if (noted < sizeof gCandidateRow) noted += (size_t)snprintf(gCandidateRow + noted, sizeof gCandidateRow - noted, " %u%s%d", i, what, code);
++        };
++        for (unsigned i = 0; i < 6 && !device; ++i) {
++            if (!candidates[i][0]) {note(i, "c", 0); continue;}
++            // The per-process caches directory may not exist yet on a fresh Data disk (2026-10-28: ENOENT); make it first.
++            if (i == 1 && mkdir(candidates[i], 0755) != 0 && errno != EEXIST) {note(i, "p", errno); continue;}
+             strlcat(candidates[i], "m2v", sizeof candidates[i]);
+-            mkdir(candidates[i], 0700);
+-            if (access(candidates[i], W_OK) != 0) continue;
++            if (mkdir(candidates[i], 0700) != 0 && errno != EEXIST) {note(i, "m", errno); continue;}
++            if (access(candidates[i], W_OK) != 0) {note(i, "a", errno); continue;}
+             // The image's pipeline pack (an earlier boot's export), into this directory before the runtime reads it. Marker 0x6Cnn: files written
+             // (saturated at 0xfe), 0x6Cff the pack was refused.
+             if (char pack[1024]; requestedPath("NativeAdrenoMetal.m2vpack", pack, sizeof pack)) {
+@@ -250,7 +266,8 @@ static id deviceForPort(unsigned port) {
+             } @catch (NSException *exception) {
+                 device = nil;
+             }
+-            if (device) {gpu->mark(0x6810 + i); gCacheDirectory = candidates[i];}   // which directory served
++            if (device) {gpu->mark(0x6810 + i); gCacheDirectory = candidates[i]; note(i, "ok", 0);}   // which directory served
++            else note(i, "o", 0);
+         }
+         if (!device) {
+             gpu->mark(0x68f2);
+@@ -307,9 +324,40 @@ static id deviceForPort(unsigned port) {
+             sleep(5);
+             // The bridge's telemetry table, resent whole every four seconds as markers (two characters each): 0xC000|row starts a row of the
+             // kernel's table, 0x8000|(a<<7)|b appends two characters. Rows are at most 90 characters; 48 rows.
+-            for (;;) {
++            for (unsigned pass = 0;; ++pass) {
+                 static char table[6144];
+                 native_bridge_metal_telemetry(table, sizeof table);
++                // uke: which directory serves the runtime's shader cache, and what it holds (files, KiB), once a minute; the Vulkan
++                // pipeline cache missed every lookup on every boot (2026-10-28), so whether the files survive a reboot is the question.
++                {
++                    static char dirRow[96];
++                    if (!(pass % 10) && !gCacheDirectory.empty()) {
++                        unsigned long long files = 0, bytes = 0;
++                        std::vector<std::string> pending{gCacheDirectory};
++                        while (!pending.empty() && files < 100000) {
++                            std::string at = pending.back();
++                            pending.pop_back();
++                            if (DIR *dir = opendir(at.c_str())) {
++                                while (struct dirent *entry = readdir(dir)) {
++                                    if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
++                                    std::string path = at + "/" + entry->d_name;
++                                    struct stat st;
++                                    if (lstat(path.c_str(), &st)) continue;
++                                    if (S_ISDIR(st.st_mode)) pending.push_back(path);
++                                    else if (S_ISREG(st.st_mode)) {++files; bytes += (unsigned long long)st.st_size;}
++                                }
++                                closedir(dir);
++                            }
++                        }
++                        const size_t keep = gCacheDirectory.size() > 52 ? gCacheDirectory.size() - 52 : 0;
++                        snprintf(dirRow, sizeof dirRow, "D files=%llu kib=%llu dir=%s", files, bytes >> 10, gCacheDirectory.c_str() + keep);
++                    }
++                    const size_t used = strlen(table);
++                    if (dirRow[0] && used + strlen(dirRow) + 2 < sizeof table) snprintf(table + used, sizeof table - used, "%s\n", dirRow);
++                    const size_t after = strlen(table);
++                    if (gCandidateRow[0] && after + strlen(gCandidateRow) + 2 < sizeof table)
++                        snprintf(table + after, sizeof table - after, "%s\n", gCandidateRow);
++                }
+                 unsigned row = 0;
+                 for (char *line = table; *line && row < 48;) {
+                     char *end = strchr(line, '\n');
