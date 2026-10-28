@@ -514,6 +514,9 @@ extern "C" volatile uint64_t armcpu_sgi_unexpected __attribute__((weak));
 extern "C" volatile uint32_t armcpu_sgi_unexpected_mask __attribute__((weak));
 extern "C" char native_adreno_metal_rows[48][96] __attribute__((weak));
 extern "C" unsigned ShengGmuPerfVote(unsigned, unsigned *) __attribute__((weak));
+extern "C" volatile uint32_t native_data_persist_state __attribute__((weak)), native_data_persist_header __attribute__((weak));
+extern "C" volatile uint64_t native_data_persist_loaded __attribute__((weak)), native_data_persist_writes __attribute__((weak)),
+    native_data_persist_errors __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_metal_rows_seq __attribute__((weak));
 }
 uint32_t rd32le(const uint8_t *p) {return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;}
@@ -1470,6 +1473,13 @@ void heartbeat() {
         }
         // The Metal bridge's telemetry table (pipeline creation time, Vulkan pipeline cache hits/misses) is only drawn on the sheng's
         // page; on uke it is read back from the userdata log, so copy it there once a minute while it keeps changing.
+        // Whether the persistent Data store resumed (2) or started over (3: the seed changed; 1 blank; 4/5 refused or failed).
+        if (t && !(t % 60) && &native_data_persist_state)
+            IOLog("UKE DATA: H%u st=%u hdr=%u ld=%llu wr=%llu er=%llu\n", t, native_data_persist_state,
+                  &native_data_persist_header ? native_data_persist_header : 0,
+                  &native_data_persist_loaded ? (unsigned long long)native_data_persist_loaded : 0ull,
+                  &native_data_persist_writes ? (unsigned long long)native_data_persist_writes : 0ull,
+                  &native_data_persist_errors ? (unsigned long long)native_data_persist_errors : 0ull);
         if (t && !(t % 60) && &native_adreno_metal_rows && &native_adreno_metal_rows_seq) {
             static uint32_t tableSeen;
             if (native_adreno_metal_rows_seq != tableSeen) {
