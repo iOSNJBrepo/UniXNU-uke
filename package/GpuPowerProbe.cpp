@@ -515,6 +515,8 @@ extern "C" volatile uint32_t armcpu_sgi_unexpected_mask __attribute__((weak));
 extern "C" char native_adreno_metal_rows[48][96] __attribute__((weak));
 extern "C" unsigned ShengGmuPerfVote(unsigned, unsigned *) __attribute__((weak));
 extern "C" volatile uint64_t native_adreno_submit_phase[6] __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_pool_mib __attribute__((weak)), native_adreno_pool_status __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak));
 extern "C" volatile uint32_t native_data_persist_state __attribute__((weak)), native_data_persist_header __attribute__((weak));
 extern "C" volatile uint64_t native_data_persist_loaded __attribute__((weak)), native_data_persist_writes __attribute__((weak)),
     native_data_persist_errors __attribute__((weak));
@@ -1410,6 +1412,11 @@ void gpuStart() {
     if (!NativeAdrenoGpuContextBringup || !NativeAdrenoGpuContextBuffers || !gSmmuMap) {setRow(6, "Q nolink"); return;}
     // 1. The GPU's own context bank and buffers (arm-smmu-qcom: the GPU always gets bank 0; DT iommus SIDs 0 and 1).
     NativeAdrenoGmuContextReport &q = native_gpu_context;
+    // The BO pool (one contiguous block, sheng-gpu-pool MiB), taken inside the bring-up before memory fragments, as on the sheng
+    // (int-159/160). Without it every BO was scattered pages, and each submission re-asserted write-combining over all of them
+    // (UKE SUBMIT wc=1.7-2.6 ms per submission, 2026-10-28). 1024 here, not the sheng's 1536: the uke runs iPadOS in a 4.75 GiB
+    // window; the bring-up halves it until one fits.
+    {unsigned pool = 1024; PE_parse_boot_argn("sheng-gpu-pool", &pool, sizeof pool); if (&native_adreno_pool_mib) native_adreno_pool_mib = pool;}
     const IOReturn ctx = NativeAdrenoGpuContextBringup(reinterpret_cast<volatile uint8_t *>(gSmmuMap->getVirtualAddress()),
         kSmmuWindow, 0, 2, 0, 0, 1, 0xffff, gpuCtxProgress, &q);
     // Q s<step> st<IOReturn> k<program>/<attach kit status> p<phase>e<enabled> r<route phase>v<verified> n<spans>
@@ -1585,6 +1592,11 @@ void heartbeat() {
                   &native_data_persist_loaded ? (unsigned long long)native_data_persist_loaded : 0ull,
                   &native_data_persist_writes ? (unsigned long long)native_data_persist_writes : 0ull,
                   &native_data_persist_errors ? (unsigned long long)native_data_persist_errors : 0ull);
+        if (t && !(t % 60) && &native_adreno_pool_stats)
+            IOLog("UKE POOL: H%u mib=%u status=%x stats=%u/%u/%u/%u/%u/%u/%u\n", t, native_adreno_pool_stats[0],
+                  &native_adreno_pool_status ? native_adreno_pool_status : 0, native_adreno_pool_stats[1], native_adreno_pool_stats[2],
+                  native_adreno_pool_stats[3], native_adreno_pool_stats[4], native_adreno_pool_stats[5], native_adreno_pool_stats[6],
+                  native_adreno_pool_stats[7]);
         // Where kernel submissions spend their time (NativeAdrenoSubmit.cpp), microseconds per submission.
         if (t && !(t % 60) && &native_adreno_submit_phase && native_adreno_submit_phase[0]) {
             uint64_t us[6] = {};
