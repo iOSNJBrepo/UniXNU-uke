@@ -39,3 +39,13 @@ AdrenoHfiStartupStatus ShengGmuBuildStartup(const ShengGmuVoteInputs *in,AdrenoH
     if(AdrenoHfiStartupValidate(&c)){sheng_gmu_build_fail=6;return AdrenoHfiStartupInvalid;}
     *out=c;return AdrenoHfiStartupSuccess;
 }
+/* GPU OPP for `sheng-gpu-perf=<n>` (1 = lowest) and the bandwidth level whose kBps that OPP's opp-peak-kBps names. */
+unsigned ShengGmuPerfVote(unsigned perf,unsigned *bandwidth)
+{
+    if(perf<1)perf=1;
+    if(perf>=SHENG_GPU_OPPS)perf=SHENG_GPU_OPPS-1;
+    unsigned bw=1;
+    for(unsigned i=1;i<SHENG_GPU_BANDWIDTHS;++i)if(sheng_gpu_bandwidths[i]==sheng_gpu_opps[perf].kbps){bw=i;break;}
+    if(bandwidth)*bandwidth=bw;
+    return perf;
+}

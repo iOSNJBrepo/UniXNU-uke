@@ -513,6 +513,7 @@ extern unsigned int vm_page_inactive_count __attribute__((weak));
 extern "C" volatile uint64_t armcpu_sgi_unexpected __attribute__((weak));
 extern "C" volatile uint32_t armcpu_sgi_unexpected_mask __attribute__((weak));
 extern "C" char native_adreno_metal_rows[48][96] __attribute__((weak));
+extern "C" unsigned ShengGmuPerfVote(unsigned, unsigned *) __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_metal_rows_seq __attribute__((weak));
 }
 uint32_t rd32le(const uint8_t *p) {return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;}
@@ -1564,8 +1565,14 @@ void gpuOn() {
     io.write32(io.cookie, ShengGmuCore, kG2hMask, ~(1u << 23));
     io.barrier(io.cookie);
     g[3] = rd(ShengGmuCore, kGxStatus);
-    // a6xx_gmu_set_initial_freq -> a6xx_hfi_set_freq: {ack_type 1 (blocking), freq index, bw index}.
-    const uint32_t vote[3] = {1, 1, 1};
+    // a6xx_gmu_set_initial_freq -> a6xx_hfi_set_freq: {ack_type 1 (blocking), freq index, bw index}. `sheng-gpu-perf=<n>` picks the
+    // A732 OPP (1 = 255 MHz ... 9 = 950 MHz, default 1) and the bandwidth level its opp-peak-kBps names; nothing changes it afterwards.
+    unsigned perf = 1, bw = 1;
+    PE_parse_boot_argn("sheng-gpu-perf", &perf, sizeof(perf));
+    perf = ShengGmuPerfVote ? ShengGmuPerfVote(perf, &bw) : 1;
+    if (!ShengGmuPerfVote) bw = 1;
+    IOLog("UKE GPUPERF: opp %u bw %u\n", perf, bw);
+    const uint32_t vote[3] = {1, perf, bw};
     uint32_t out[16], error = 0;
     size_t count = 0;
     g[0] = AdrenoHfiExchange(&gColdDevice.hfi, 30, vote, 3, 1000, hfiWait, out, 16, &count, &error);

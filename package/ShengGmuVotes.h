@@ -24,6 +24,7 @@ typedef struct {
  * All input/aux/output storage is disjoint and immutable during the call.
  * Failure leaves output unchanged. Software fixtures are not board evidence. */
 AdrenoHfiStartupStatus ShengGmuBuildStartup(const ShengGmuVoteInputs *,AdrenoHfiStartupConfig *);
+unsigned ShengGmuPerfVote(unsigned perf,unsigned *bandwidth);
 #ifdef __cplusplus
 }
 #endif
