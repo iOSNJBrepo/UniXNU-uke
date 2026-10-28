@@ -1,0 +1,21 @@
+diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
+index b03c6ee..f92c28e 100644
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -860,9 +860,15 @@ darwin_queue_submit(struct tu_queue *queue, void *_submit,
+    struct tu_darwin_queue_submit *submit = (struct tu_darwin_queue_submit *)_submit;
+    struct tu_device *dev = queue->device;
+ 
+-   /* The kernel client has one ring and no GPU-side waits: wait on the CPU before submitting. */
++   /* The kernel client has one ring and no GPU-side waits. A sync that already resolved to a fence on that ring
++    * needs no wait: the CP runs the ring in order, as drm_sched skips dependencies on its own ring. Waiting for its
++    * completion here, under submit_mutex, held every submission until the GPU had finished the previous one
++    * (uke Metal telemetry 2026-10-28: ~97 ms of a ~110 ms commit before it was scheduled). Anything else
++    * (unsignaled) is still waited for on the CPU. */
+    for (uint32_t i = 0; i < wait_count; i++) {
+       struct vk_darwin_sync *s = container_of(waits[i].sync, struct vk_darwin_sync, vk);
++      if (s->state == DARWIN_SYNC_FENCE || s->state == DARWIN_SYNC_SIGNALED)
++         continue;
+       VkResult result = darwin_sync_wait(dev, s, UINT64_MAX);
+       if (result != VK_SUCCESS)
+          return vk_device_set_lost(&dev->vk, "wait before submit failed");

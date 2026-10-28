@@ -23,7 +23,7 @@ Core `Allenwdk/UniXNU` uke-gpu 48b45aa, NativeMetal 6dcd4cb, Mesa 85fda3b3 with 
 Rust 1.98.0. Apply `native-metal-plugin.patch` (Turnip with `TU_DEBUG=nocb,sysmem`: the A732 hung in BV binning) and
 `core-scripts.patch` (host-sim fixes; seed tools read only the APFS header instead of the whole 95 GiB image), then in the tree:
 
-    python3 scripts/build-turnip-darwin.py --target ios
+    python3 scripts/build-turnip-darwin.py --target ios   # with turnip-darwin-same-ring-waits.patch recorded last
     python3 scripts/build-turnip-darwin.py --target host
     python3 scripts/build-native-metal-bridge.py --target ios
     python3 scripts/build-adreno-metal-plugin.py
@@ -35,3 +35,12 @@ Rust 1.98.0. Apply `native-metal-plugin.patch` (Turnip with `TU_DEBUG=nocb,sysme
 `size_mib = 94` for this build only (the payload is 88 MiB; the vendor_boot partition is 96 MiB and the image ends 196 KiB short of it).
 Kernel args: `offline-legacy-base-present=1 offline-legacy-noconsole=1 sheng-touch=4 sheng-touch-hid=1 sheng-gpu-power=9
 sheng-gpu-metal=1 sheng-fb-gpu=1 sheng-gpu-addon=1`, `--owner-trust-cache` with the plugin's trust bundle, the GPU seed as `--data-ramdisk`.
+
+## Faster (2026-10-28)
+
+- `sheng-gpu-perf=7` (fork f87a3f4): the uke voted the A732's lowest OPP (255 MHz, 2.1 GB/s) forever; OPP 7 is 835 MHz with
+  14.4 GB/s. `sheng-cpufreq=3` keeps the CPU domains at their highest non-turbo level.
+- `turnip-darwin-same-ring-waits.patch` (add it to `scripts/data/adreno-compiler-inputs.json` after the other Mesa patches):
+  Turnip's Darwin backend waited on the CPU, under `submit_mutex`, for every wait sync's fence to complete before submitting.
+  With one in-order ring a sync already fenced on it needs no wait. Metal telemetry (`UKE MTL` rows, fork 838d1f9):
+  commit-to-complete mean 74 -> 38 ms, commit-to-scheduled ~97 -> 5-14 ms. The user saw it more fluid with no drawing faults.
