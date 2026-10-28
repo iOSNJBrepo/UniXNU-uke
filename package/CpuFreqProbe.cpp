@@ -71,4 +71,6 @@ extern "C" void sheng_cpufreq_probe(void) {
                                 d, enable & 1, state * kXoKHz / 1000, perf, best, bestKHz / 1000, rc ? " SET" : "");
     }
     native_cpufreq_stage = 2;
+    // uke: the boot progress panel is gone once the UI owns the screen; keep the row in the log the OrangeFox readout gets.
+    IOLog("UKE %s\n", native_cpufreq_row);
 }
