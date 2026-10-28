@@ -277,7 +277,10 @@ __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status,c
     }
 }
 bool native_legacy_gpu_offer(void *display,IOMemoryDescriptor *memory,uint64_t stride,uint32_t width,uint32_t height) {
-    return gpuHandoffPresenter && native_gop_gpu_offer(gpuHandoffPresenter,display,memory,stride,width,height);
+    const bool accepted=gpuHandoffPresenter && native_gop_gpu_offer(gpuHandoffPresenter,display,memory,stride,width,height);
+    // A frame the GPU takes is a frame on the panel too: without this the text console kept drawing over the GPU's frames.
+    if(accepted)native_legacy_mute_console();
+    return accepted;
 }
 void native_legacy_gpu_fallback_observed(int status) {
     native_legacy_gpu_last_status=(uint32_t)status;native_legacy_gpu_fallbacks=native_legacy_gpu_fallbacks+1;
