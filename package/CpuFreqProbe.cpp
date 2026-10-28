@@ -13,6 +13,7 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <libkern/c++/OSSharedPtr.h>
 #include <pexpert/pexpert.h>
+#include <kern/thread.h>
 
 extern "C" {
 char native_cpufreq_row[120];
@@ -33,6 +34,26 @@ void wr32(uintptr_t base, uint32_t reg, uint32_t value) {
     __asm__ volatile("dsb sy" ::: "memory");
 }
 uint32_t lutKHz(uint32_t row) {return (row >> 30) ? kXoKHz * (row & 0xff) : kGpllHalfKHz;}
+
+// The probe runs before the OrangeFox log window starts recording, so repeat the current level of every domain once the
+// UI is up (60 s and 180 s): it also shows whether anything lowered the level after it was set.
+void lateThread(void *, wait_result_t) {
+    for (unsigned pass = 0; pass < 2; ++pass) {
+        IOSleep(pass ? 120000 : 60000);
+        char row[120];
+        unsigned n = (unsigned)snprintf(row, sizeof(row), "CPUFREQ+%us", pass ? 180 : 60);
+        for (unsigned d = 0; d < 3; ++d) {
+            IODeviceMemory *memory = IODeviceMemory::withRange(kDomainBase[d], kDomainSize);
+            OSSharedPtr<IOMemoryMap> map(memory ? memory->map(kIOMapAnywhere | kIOMapInhibitCache) : nullptr, OSNoRetain);
+            if (memory) memory->release();
+            if (!map) {n += (unsigned)snprintf(row + n, sizeof(row) - n, " d%u:nomap", d); continue;}
+            uintptr_t va = static_cast<uintptr_t>(map->getVirtualAddress());
+            n += (unsigned)snprintf(row + n, sizeof(row) - n, " d%u:c%u p%u", d,
+                                    (rd32(va, kRegDomainState) & 0xff) * kXoKHz / 1000, rd32(va, kRegPerfState));
+        }
+        IOLog("UKE %s | %s\n", row, native_cpufreq_row);
+    }
+}
 }
 
 extern "C" void sheng_cpufreq_probe(void) {
@@ -73,4 +94,6 @@ extern "C" void sheng_cpufreq_probe(void) {
     native_cpufreq_stage = 2;
     // uke: the boot progress panel is gone once the UI owns the screen; keep the row in the log the OrangeFox readout gets.
     IOLog("UKE %s\n", native_cpufreq_row);
+    thread_t thread = nullptr;
+    if (kernel_thread_start(lateThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
