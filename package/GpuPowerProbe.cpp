@@ -512,6 +512,8 @@ extern unsigned int vm_page_inactive_count __attribute__((weak));
 // ArmCpu (drivers/ArmCpu): SGIs it acknowledged without a handler.
 extern "C" volatile uint64_t armcpu_sgi_unexpected __attribute__((weak));
 extern "C" volatile uint32_t armcpu_sgi_unexpected_mask __attribute__((weak));
+extern "C" char native_adreno_metal_rows[48][96] __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_metal_rows_seq __attribute__((weak));
 }
 uint32_t rd32le(const uint8_t *p) {return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;}
 uint16_t rd16le(const uint8_t *p) {return uint16_t(p[0] | p[1] << 8);}
@@ -1463,6 +1465,16 @@ void heartbeat() {
             if (fsr != fsrSeen && fsr != 0xdead && gpuFault(&far, &syn)) {
                 fsrSeen = fsr;
                 IOLog("UKE SMMU: H%u fsr=%x far=%llx fsynr0=%x %s\n", t, fsr, (unsigned long long)far, syn, (syn & 0x10) ? "write" : "read");
+            }
+        }
+        // The Metal bridge's telemetry table (pipeline creation time, Vulkan pipeline cache hits/misses) is only drawn on the sheng's
+        // page; on uke it is read back from the userdata log, so copy it there once a minute while it keeps changing.
+        if (t && !(t % 60) && &native_adreno_metal_rows && &native_adreno_metal_rows_seq) {
+            static uint32_t tableSeen;
+            if (native_adreno_metal_rows_seq != tableSeen) {
+                tableSeen = native_adreno_metal_rows_seq;
+                for (unsigned r = 0; r < 48; ++r)
+                    if (native_adreno_metal_rows[r][0]) IOLog("UKE MTL H%u %02u: %.90s\n", t, r, native_adreno_metal_rows[r]);
             }
         }
         if (!(t % 10))
