@@ -16,6 +16,10 @@ volatile uint64_t native_gop_gpu_offers,native_gop_gpu_completions,native_gop_gp
 /* waitSwap: [0] calls, [1] timeouts, [2] the requested timeout of the last call (ms), [3] time the last timed-out call really waited (ns), [4] the shortest
  * and [5] the longest such wait (ns), [6] total ns waited in timed-out calls. A timed wait that returns long before its deadline shows here. */
 volatile uint64_t native_gop_wait_stats[7];
+/* uke: the GPU hand-off's frame timing in mach ticks: [0] offer-to-complete total, [1] its longest, [2] offer-to-delivery (the client picked it
+ * up and its mapping was made) total, [3] delivery-to-complete total. Logged by GpuPowerProbe as UKE PRESENT. */
+volatile uint64_t native_gop_frame_ticks[4];
+static uint64_t gOfferedAt,gDeliveredAt;
 IOService *native_gop_presenter_create(void);
 bool native_gop_gpu_offer(IOService *,void *display,IOMemoryDescriptor *,uint64_t stride,uint32_t width,uint32_t height);
 void native_gop_presenter_set_source(IOService *presenter,IOService *nub);
@@ -136,6 +140,7 @@ bool NativeGOPPresenter::offer(void *display,IOMemoryDescriptor *memory,uint64_t
         memory->retain();
         swap={true,false,++swapSequence,display,memory,nullptr,stride,width,height};
         native_gop_gpu_offers=native_gop_gpu_offers+1;
+        gOfferedAt=mach_absolute_time();
         IOLockWakeup(gate,&swap,false);
     }
     IOLockUnlock(gate);return accepted;
@@ -174,12 +179,18 @@ IOReturn NativeGOPPresenter::waitSwap(task_t task,uint64_t timeoutMs,NGPSwap *ou
     swap.map=map;
     out->sequence=sequence;out->address=map->getVirtualAddress();out->bytes=map->getLength();out->stride=stride;
     out->width=width;out->height=height;out->format=NGP_BGRX8888;out->reserved=0;
+    gDeliveredAt=mach_absolute_time();native_gop_frame_ticks[2]=native_gop_frame_ticks[2]+(gDeliveredAt-gOfferedAt);
     IOLockUnlock(gate);return kIOReturnSuccess;
 }
 IOReturn NativeGOPPresenter::completeSwap(uint64_t sequence,int status) {
     IOLockLock(gate);
     if(!swap.offered || !swap.delivered || swap.sequence!=sequence) {IOLockUnlock(gate);return kIOReturnBadArgument;}
     auto done=swap;swap={};
+    {
+        const uint64_t now=mach_absolute_time(),total=now-gOfferedAt;
+        native_gop_frame_ticks[0]=native_gop_frame_ticks[0]+total;if(total>native_gop_frame_ticks[1])native_gop_frame_ticks[1]=total;
+        native_gop_frame_ticks[3]=native_gop_frame_ticks[3]+(now-gDeliveredAt);
+    }
     IOLockUnlock(gate);
     OSSafeReleaseNULL(done.map);done.memory->release();
     if(status)__atomic_fetch_add(&native_gop_gpu_failures,1,__ATOMIC_RELAXED);

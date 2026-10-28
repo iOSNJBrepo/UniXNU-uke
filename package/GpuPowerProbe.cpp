@@ -515,6 +515,8 @@ extern "C" volatile uint32_t armcpu_sgi_unexpected_mask __attribute__((weak));
 extern "C" char native_adreno_metal_rows[48][96] __attribute__((weak));
 extern "C" unsigned ShengGmuPerfVote(unsigned, unsigned *) __attribute__((weak));
 extern "C" volatile uint64_t native_adreno_submit_phase[6] __attribute__((weak));
+extern "C" volatile uint64_t native_gop_gpu_offers __attribute__((weak)), native_gop_gpu_completions __attribute__((weak));
+extern "C" volatile uint64_t native_gop_frame_ticks[4] __attribute__((weak)), native_legacy_base_skipped __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_mib __attribute__((weak)), native_adreno_pool_status __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak));
 extern "C" volatile uint32_t native_data_persist_state __attribute__((weak)), native_data_persist_header __attribute__((weak));
@@ -1592,6 +1594,16 @@ void heartbeat() {
                   &native_data_persist_loaded ? (unsigned long long)native_data_persist_loaded : 0ull,
                   &native_data_persist_writes ? (unsigned long long)native_data_persist_writes : 0ull,
                   &native_data_persist_errors ? (unsigned long long)native_data_persist_errors : 0ull);
+        // The GPU hand-off of the compositor's frames: offered, copied, dropped while busy, and offer-to-complete time.
+        if (t && !(t % 20) && &native_gop_frame_ticks && &native_gop_gpu_completions && native_gop_gpu_completions) {
+            uint64_t us[4] = {};
+            for (unsigned i = 0; i < 4; ++i) {absolutetime_to_nanoseconds(native_gop_frame_ticks[i], &us[i]); us[i] /= 1000;}
+            const uint64_t n = native_gop_gpu_completions;
+            IOLog("UKE PRESENT: H%u offered=%llu done=%llu dropped=%llu us/frame total=%llu max=%llu pickup=%llu copy=%llu\n", t,
+                  &native_gop_gpu_offers ? (unsigned long long)native_gop_gpu_offers : 0ull, (unsigned long long)n,
+                  &native_legacy_base_skipped ? (unsigned long long)native_legacy_base_skipped : 0ull, (unsigned long long)(us[0] / n),
+                  (unsigned long long)us[1], (unsigned long long)(us[2] / n), (unsigned long long)(us[3] / n));
+        }
         if (t && !(t % 60) && &native_adreno_pool_stats)
             IOLog("UKE POOL: H%u mib=%u status=%x stats=%u/%u/%u/%u/%u/%u/%u\n", t, native_adreno_pool_stats[0],
                   &native_adreno_pool_status ? native_adreno_pool_status : 0, native_adreno_pool_stats[1], native_adreno_pool_stats[2],

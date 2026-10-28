@@ -33,6 +33,8 @@ extern "C" void native_legacy_copy_timing_observed(uint64_t ticks,uint64_t bytes
 extern "C" void native_legacy_retirement_observed(IOService *);
 // GPU hand-off (boot-arg sheng-fb-gpu=1): the frame is offered to the privileged GPU client instead of being copied; the swap retires when the
 // client reports the GPU copy done (native_legacy_gpu_complete). A refused offer or a failed copy uses the CPU copy below and is counted.
+// uke: base frames the compositor finished while the GPU was still copying the previous one (dropped). Logged as UKE PRESENT.
+extern "C" {volatile uint64_t native_legacy_base_skipped;}
 extern "C" bool native_legacy_gpu_offer(void *display,IOMemoryDescriptor *,uint64_t stride,uint32_t width,uint32_t height);
 extern "C" void native_legacy_gpu_fallback_observed(int status);
 // Original slot242 and the surface -> Mach-port helper it uses, bound by the
@@ -149,7 +151,7 @@ public:
                         if(baseGpuOffers<=2)IOLog("UKE: base frame offered to the GPU (%u)\n",baseGpuOffers);
                         break;
                     }
-                    if(baseGpuOffers) {baseGpuSkipped=baseGpuSkipped+1;break;}
+                    if(baseGpuOffers) {baseGpuSkipped=baseGpuSkipped+1;native_legacy_base_skipped=native_legacy_base_skipped+1;break;}
                 }
             }
             IOMemoryMap *source=memory->map(kIOMapAnywhere|kIOMapReadOnly);
