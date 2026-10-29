@@ -1686,31 +1686,41 @@ void heartbeat() {
             // word, kernel cacheable alias> u<DRAM before the CPU cache maintenance> v<DRAM after it> d<DRAM now>". int-069 found the
             // table entry right and DRAM holding the IB at hang time, yet the CP read a zero header: u=0 with c/v = 0x70970001 means
             // the IB sat in a CPU cache line when the GPU fetched it; all four 0x70970001 point at the GPU side (translation or cache).
-            // uke binning hang (2026-10-29): once per boot, the words each CP thread's IB1 holds around where it stopped (64 before the
-            // fetch pointer, 16 after), read through the GPU's own page table, so the BV draw and the state before it can be decoded.
+            // uke binning hang (2026-10-29): once per boot, where BV stopped. CP_BV_IB1/IB2_BASE hold an IB's start and REM_SIZE what is
+            // left, so IB1 is read from its start for the CP_INDIRECT_BUFFER (0x3f) that called IB2, whose size gives IB2's current
+            // position (start + (size - rem) * 4); the 96 words before it and 16 after are dumped, then IB1's first 128 words.
             {
                 static bool dumped;
                 if (!dumped) {
                     dumped = true;
-                    struct Thread {const char *name; uint32_t lo, hi, rem;} threads[3] = {{"BV", 0x0a6d, 0x0a6e, 0x0a70}, {"BV2", 0x0a71, 0x0a72, 0x0a74},
-                                                                                {"BR", 0x0928, 0x0929, 0x092a}};
-                    for (const Thread &th : threads) {
-                        const uint64_t at = (uint64_t(gpuRd(th.hi)) << 32) | gpuRd(th.lo);
-                        const uint32_t rem = gpuRd(th.rem);
-                        IOLog("UKE IBDUMP: H%u %s ib=%llx rem=%x bvfault=%x\n", t, th.name, (unsigned long long)at, rem, gpuRd(0x0a64));
-                        if (!at) continue;
-                        const uint64_t from = at >= 64 * 4 ? at - 64 * 4 : 0;
-                        for (unsigned line = 0; line < 10; ++line) {
-                            uint32_t w[8] = {};
-                            for (unsigned i = 0; i < 8; ++i) {
-                                const uint64_t va = from + (line * 8 + i) * 4;
-                                uint64_t pa = 0, q = 0;
-                                if (gpuWalk(va & ~uint64_t(7), &pa) && physRead64(pa, &q)) w[i] = uint32_t(q >> ((va & 4) * 8));
-                            }
-                            IOLog("UKE IBDUMP: %s %llx %08x %08x %08x %08x %08x %08x %08x %08x\n", th.name,
-                                  (unsigned long long)(from + line * 32), w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+                    auto word = [](uint64_t va) -> uint32_t {
+                        uint64_t pa = 0, q = 0;
+                        return gpuWalk(va & ~uint64_t(7), &pa) && physRead64(pa, &q) ? uint32_t(q >> ((va & 4) * 8)) : 0xdeadbeefu;
+                    };
+                    auto dump = [&](const char *name, uint64_t from, unsigned words) {
+                        for (unsigned line = 0; line * 8 < words; ++line) {
+                            uint32_t w[8];
+                            for (unsigned i = 0; i < 8; ++i) w[i] = word(from + (line * 8 + i) * 4);
+                            IOLog("UKE IBDUMP: %s %llx %08x %08x %08x %08x %08x %08x %08x %08x\n", name, (unsigned long long)(from + line * 32),
+                                  w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+                        }
+                    };
+                    const uint64_t ib1 = (uint64_t(gpuRd(0x0a6e)) << 32) | gpuRd(0x0a6d), ib2 = (uint64_t(gpuRd(0x0a72)) << 32) | gpuRd(0x0a71);
+                    const uint32_t rem1 = gpuRd(0x0a70), rem2 = gpuRd(0x0a74);
+                    uint32_t size2 = 0, size1at = 0;
+                    for (uint32_t i = 0; ib1 && i < 4096 && !size2; ++i) {
+                        const uint32_t h = word(ib1 + i * 4);
+                        if ((h >> 28) == 7 && ((h >> 16) & 0x7f) == 0x3f && (h & 0x3fff) == 3 &&
+                            word(ib1 + (i + 1) * 4) == uint32_t(ib2) && word(ib1 + (i + 2) * 4) == uint32_t(ib2 >> 32)) {
+                            size2 = word(ib1 + (i + 3) * 4) & 0xfffff;size1at = i;
                         }
                     }
+                    const uint64_t cur2 = size2 >= rem2 ? ib2 + uint64_t(size2 - rem2) * 4 : 0;
+                    IOLog("UKE IBDUMP: H%u BV ib1=%llx rem=%x ib2=%llx rem=%x size=%x (called at ib1+%x) cur2=%llx bvfault=%x protect=%x\n", t,
+                          (unsigned long long)ib1, rem1, (unsigned long long)ib2, rem2, size2, size1at * 4, (unsigned long long)cur2,
+                          gpuRd(0x0a64), gpuRd(0x0a61));
+                    if (cur2) dump("BV2", cur2 >= ib2 + 96 * 4 ? cur2 - 96 * 4 : ib2, cur2 >= ib2 + 96 * 4 ? 112 : uint32_t((cur2 - ib2) / 4) + 16);
+                    if (ib1) dump("BV1", ib1, 128);
                 }
             }
             static char coherenceRow[64];
