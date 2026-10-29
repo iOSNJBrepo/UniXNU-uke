@@ -1715,6 +1715,16 @@ void heartbeat() {
                             size2 = word(ib1 + (i + 3) * 4) & 0xfffff;size1at = i;
                         }
                     }
+                    // No direct call found (chained or deeper than the scan): walk IB2's packets from its start (TYPE4 0x4..., TYPE7
+                    // 0x7...: count in bits 0..13) until a word is no packet header; that walk's length is IB2's size.
+                    if (!size2 && ib2) {
+                        uint32_t i = 0;
+                        while (i < 0x20000) {
+                            const uint32_t h = word(ib2 + i * 4);
+                            if ((h >> 28) == 7 || (h >> 28) == 4) i += 1 + (h & 0x3fff); else break;
+                        }
+                        size2 = i;
+                    }
                     const uint64_t cur2 = size2 >= rem2 ? ib2 + uint64_t(size2 - rem2) * 4 : 0;
                     IOLog("UKE IBDUMP: H%u BV ib1=%llx rem=%x ib2=%llx rem=%x size=%x (called at ib1+%x) cur2=%llx bvfault=%x protect=%x\n", t,
                           (unsigned long long)ib1, rem1, (unsigned long long)ib2, rem2, size2, size1at * 4, (unsigned long long)cur2,
