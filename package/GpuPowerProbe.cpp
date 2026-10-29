@@ -1693,9 +1693,24 @@ void heartbeat() {
                 static bool dumped;
                 if (!dumped) {
                     dumped = true;
+                    // One GPU table walk and one uncached mapping per 4 KiB page, kept while reads stay on it (a walk and a mapping per
+                    // word stalled this thread for minutes on IB2's packet walk).
+                    static IOMemoryMap *pageMap = nullptr;
+                    static uint64_t pageVa = ~0ull;
                     auto word = [](uint64_t va) -> uint32_t {
-                        uint64_t pa = 0, q = 0;
-                        return gpuWalk(va & ~uint64_t(7), &pa) && physRead64(pa, &q) ? uint32_t(q >> ((va & 4) * 8)) : 0xdeadbeefu;
+                        if ((va >> 12) != pageVa) {
+                            if (pageMap) {pageMap->release(); pageMap = nullptr;}
+                            pageVa = va >> 12;
+                            uint64_t pa = 0;
+                            if (gpuWalk(va & ~uint64_t(0xfff), &pa) && pa) {
+                                if (IODeviceMemory *m = IODeviceMemory::withRange(pa & ~uint64_t(0xfff), 0x1000)) {
+                                    pageMap = m->map(kIOMapAnywhere | kIOMapInhibitCache);
+                                    m->release();
+                                }
+                            }
+                        }
+                        if (!pageMap) return 0xdeadbeefu;
+                        return *reinterpret_cast<volatile uint32_t *>(pageMap->getVirtualAddress() + (va & 0xffc));
                     };
                     auto dump = [&](const char *name, uint64_t from, unsigned words) {
                         for (unsigned line = 0; line * 8 < words; ++line) {
@@ -1719,7 +1734,7 @@ void heartbeat() {
                     // 0x7...: count in bits 0..13) until a word is no packet header; that walk's length is IB2's size.
                     if (!size2 && ib2) {
                         uint32_t i = 0;
-                        while (i < 0x20000) {
+                        while (i < 0x8000) {
                             const uint32_t h = word(ib2 + i * 4);
                             if ((h >> 28) == 7 || (h >> 28) == 4) i += 1 + (h & 0x3fff); else break;
                         }
@@ -1731,6 +1746,8 @@ void heartbeat() {
                           gpuRd(0x0a64), gpuRd(0x0a61));
                     if (cur2) dump("BV2", cur2 >= ib2 + 96 * 4 ? cur2 - 96 * 4 : ib2, cur2 >= ib2 + 96 * 4 ? 112 : uint32_t((cur2 - ib2) / 4) + 16);
                     if (ib1) dump("BV1", ib1, 128);
+                    if (pageMap) {pageMap->release(); pageMap = nullptr;}
+                    pageVa = ~0ull;
                 }
             }
             static char coherenceRow[64];
