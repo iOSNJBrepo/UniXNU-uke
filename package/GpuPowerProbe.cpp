@@ -1686,6 +1686,33 @@ void heartbeat() {
             // word, kernel cacheable alias> u<DRAM before the CPU cache maintenance> v<DRAM after it> d<DRAM now>". int-069 found the
             // table entry right and DRAM holding the IB at hang time, yet the CP read a zero header: u=0 with c/v = 0x70970001 means
             // the IB sat in a CPU cache line when the GPU fetched it; all four 0x70970001 point at the GPU side (translation or cache).
+            // uke binning hang (2026-10-29): once per boot, the words each CP thread's IB1 holds around where it stopped (64 before the
+            // fetch pointer, 16 after), read through the GPU's own page table, so the BV draw and the state before it can be decoded.
+            {
+                static bool dumped;
+                if (!dumped) {
+                    dumped = true;
+                    struct Thread {const char *name; uint32_t lo, hi, rem;} threads[3] = {{"BV", 0x0a6d, 0x0a6e, 0x0a70}, {"BV2", 0x0a71, 0x0a72, 0x0a74},
+                                                                                {"BR", 0x0928, 0x0929, 0x092a}};
+                    for (const Thread &th : threads) {
+                        const uint64_t at = (uint64_t(gpuRd(th.hi)) << 32) | gpuRd(th.lo);
+                        const uint32_t rem = gpuRd(th.rem);
+                        IOLog("UKE IBDUMP: H%u %s ib=%llx rem=%x bvfault=%x\n", t, th.name, (unsigned long long)at, rem, gpuRd(0x0a64));
+                        if (!at) continue;
+                        const uint64_t from = at >= 64 * 4 ? at - 64 * 4 : 0;
+                        for (unsigned line = 0; line < 10; ++line) {
+                            uint32_t w[8] = {};
+                            for (unsigned i = 0; i < 8; ++i) {
+                                const uint64_t va = from + (line * 8 + i) * 4;
+                                uint64_t pa = 0, q = 0;
+                                if (gpuWalk(va & ~uint64_t(7), &pa) && physRead64(pa, &q)) w[i] = uint32_t(q >> ((va & 4) * 8));
+                            }
+                            IOLog("UKE IBDUMP: %s %llx %08x %08x %08x %08x %08x %08x %08x %08x\n", th.name,
+                                  (unsigned long long)(from + line * 32), w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+                        }
+                    }
+                }
+            }
             static char coherenceRow[64];
             if (!coherenceRow[0]) {
                 const uint64_t ib = (uint64_t(gpuRd(0x0929)) << 32) | gpuRd(0x0928);
