@@ -37,6 +37,25 @@ extern "C" void native_legacy_retirement_observed(IOService *);
 // client reports the GPU copy done (native_legacy_gpu_complete). A refused offer or a failed copy uses the CPU copy below and is counted.
 // uke: base frames the compositor finished while the GPU was still copying the previous one (dropped). Logged as UKE PRESENT.
 extern "C" {volatile uint64_t native_legacy_base_skipped;}
+// uke: the compositor's frames per wall-clock second, counted where each one reaches presentBase (before the busy check, so frames dropped while
+// the GPU copied the previous one count too): the busiest second, and how many seconds fell into each band (0 idle seconds are not counted;
+// bands 1-9, 10-19, 20-29, 30-44, 45-59, 60+). Logged by GpuPowerProbe as UKE FPS.
+extern "C" {volatile uint32_t native_legacy_fps_max;volatile uint32_t native_legacy_fps_bands[6];}
+static uint64_t gFpsSecond,gFpsCount;
+static void native_legacy_frame_rate_tick() {
+    uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
+    const uint64_t second=ns/1000000000ull;
+    if(second!=gFpsSecond) {
+        if(gFpsCount) {
+            const uint32_t n=(uint32_t)gFpsCount;
+            if(n>native_legacy_fps_max)native_legacy_fps_max=n;
+            const unsigned band=n<10?0:n<20?1:n<30?2:n<45?3:n<60?4:5;
+            native_legacy_fps_bands[band]=native_legacy_fps_bands[band]+1;
+        }
+        gFpsSecond=second;gFpsCount=0;
+    }
+    ++gFpsCount;
+}
 extern "C" bool native_legacy_gpu_offer(void *display,IOMemoryDescriptor *,uint64_t stride,uint32_t width,uint32_t height);
 extern "C" void native_legacy_gpu_fallback_observed(int status);
 // Display refresh tick (boot-arg sheng-vsync=<Hz>, 0 or absent: off). The original family sends the compositor's vsync message (type 5)
@@ -120,6 +139,7 @@ public:
         unsigned enabled=0;PE_parse_boot_argn("offline-legacy-base-present",&enabled,sizeof(enabled));
         if(enabled!=1 || !bootMapping || !primary)return;
         if(!frameSurfaceId)return;
+        native_legacy_frame_rate_tick();
         if(!OSCompareAndSwap(0,1,&baseBusy))return;
         do {
             OSObject *object=nullptr;const char *kind="frame";

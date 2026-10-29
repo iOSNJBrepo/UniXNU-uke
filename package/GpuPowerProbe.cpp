@@ -520,6 +520,7 @@ extern "C" volatile uint64_t native_gop_frame_ticks[4] __attribute__((weak)), na
 extern "C" volatile uint64_t native_gop_map_cache[2] __attribute__((weak));
 extern "C" volatile uint64_t native_legacy_vsync_events[6] __attribute__((weak));
 extern "C" volatile uint32_t native_legacy_vsync_hz __attribute__((weak));
+extern "C" volatile uint32_t native_legacy_fps_max __attribute__((weak)), native_legacy_fps_bands[6] __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_mib __attribute__((weak)), native_adreno_pool_status __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak));
 extern "C" volatile uint32_t native_data_persist_state __attribute__((weak)), native_data_persist_header __attribute__((weak));
@@ -1597,6 +1598,10 @@ void heartbeat() {
                   &native_data_persist_loaded ? (unsigned long long)native_data_persist_loaded : 0ull,
                   &native_data_persist_writes ? (unsigned long long)native_data_persist_writes : 0ull,
                   &native_data_persist_errors ? (unsigned long long)native_data_persist_errors : 0ull);
+        if (t && !(t % 20) && &native_legacy_fps_bands)
+            IOLog("UKE FPS: H%u max=%u seconds 1-9=%u 10-19=%u 20-29=%u 30-44=%u 45-59=%u 60+=%u\n", t, native_legacy_fps_max,
+                  native_legacy_fps_bands[0], native_legacy_fps_bands[1], native_legacy_fps_bands[2], native_legacy_fps_bands[3],
+                  native_legacy_fps_bands[4], native_legacy_fps_bands[5]);
         if (t && !(t % 20) && &native_legacy_vsync_events)
             IOLog("UKE VSYNC: H%u hz=%u armed=%llu sent=%llu idle=%llu late=%llu start=%llu refresh=%llu\n", t,
                   &native_legacy_vsync_hz ? native_legacy_vsync_hz : 0u, (unsigned long long)native_legacy_vsync_events[0],
