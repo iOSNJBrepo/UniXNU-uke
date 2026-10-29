@@ -1759,8 +1759,43 @@ void heartbeat() {
                     IOLog("UKE IBDUMP: H%u BV ib1=%llx rem=%x ib2=%llx rem=%x size=%x (called at ib1+%x) cur2=%llx bvfault=%x protect=%x\n", t,
                           (unsigned long long)ib1, rem1, (unsigned long long)ib2, rem2, size2, size1at * 4, (unsigned long long)cur2,
                           gpuRd(0x0a64), gpuRd(0x0a61));
-                    if (cur2) dump("BV2", cur2 >= ib2 + 96 * 4 ? cur2 - 96 * 4 : ib2, cur2 >= ib2 + 96 * 4 ? 112 : uint32_t((cur2 - ib2) / 4) + 16);
-                    if (ib1) dump("BV1", ib1, 128);
+                    // Full dump for offline decoding (2026-10-29: the hang always lands in the same render pass): IB2 from its start,
+                    // IB1, then every state group the IB2's CP_SET_DRAW_STATE (0x43) packets point at (count, then address), each once.
+                    // IOLog lines are paced so the message buffer the userdata log mirrors does not overrun.
+                    auto paced = [&](const char *name, uint64_t from, unsigned words) {
+                        for (unsigned at = 0; at < words; at += 256) {
+                            dump(name, from + at * 4, words - at < 256 ? words - at : 256);
+                            IOSleep(20);
+                        }
+                    };
+                    const uint32_t span2 = size2 > rem2 ? size2 : 0x1800;
+                    if (ib2) paced("IB2", ib2, span2 < 0x1800 ? span2 : 0x1800);
+                    if (ib1) paced("IB1", ib1, 0x400);
+                    uint64_t seen[64] = {};
+                    unsigned seenCount = 0, total = 0;
+                    for (uint32_t i = 0; ib2 && i < 0x1800 && total < 0x2000;) {
+                        const uint32_t h = word(ib2 + i * 4);
+                        if ((h >> 28) == 4) {i += 1 + (h & 0x3fff); continue;}
+                        if ((h >> 28) != 7) break;
+                        const uint32_t n = h & 0x3fff;
+                        if (((h >> 16) & 0x7f) == 0x43) {
+                            for (uint32_t g = 0; g + 2 < n; g += 3) {
+                                const uint32_t d0 = word(ib2 + (i + 1 + g) * 4);
+                                const uint64_t addr = (uint64_t(word(ib2 + (i + 3 + g) * 4)) << 32) | word(ib2 + (i + 2 + g) * 4);
+                                const uint32_t cnt = d0 & 0xffff;
+                                bool known = !addr || !cnt;
+                                for (unsigned k = 0; k < seenCount && !known; ++k) known = seen[k] == addr;
+                                if (known || seenCount >= 64) continue;
+                                seen[seenCount++] = addr;
+                                IOLog("UKE IBDUMP: STATE %llx count=%x d0=%08x\n", (unsigned long long)addr, cnt, d0);
+                                const uint32_t take = cnt < 0x200 ? cnt : 0x200;
+                                paced("ST", addr, take);
+                                total += take;
+                            }
+                        }
+                        i += 1 + n;
+                    }
+                    IOLog("UKE IBDUMP: END states=%u words=%u\n", seenCount, total);
                     if (pageMap) {pageMap->release(); pageMap = nullptr;}
                     pageVa = ~0ull;
                 }
