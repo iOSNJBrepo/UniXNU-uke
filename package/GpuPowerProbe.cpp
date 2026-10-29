@@ -1471,7 +1471,9 @@ void gpuStart() {
     gpuWr64(A740_UCHE_TRAP_BASE, 0x1fffffffff000ull);
     gpuWr64(A740_UCHE_WRITE_THRU_BASE, 0x1fffffffff000ull);
     gpuWr64(A740_UCHE_GMEM_RANGE_MIN, 0x1000000);                    // a740 family: SZ_16M
-    gpuWr64(A740_UCHE_GMEM_RANGE_MAX, 0x1000000 + 3 * 0x100000 - 1);  // gmem 3 MiB
+    // a6xx_hw_init: gmem_range_min + adreno_gpu->info->gmem - 1. The A732 has 1.5 MiB (gen7_11_0, and the 0x180000 Turnip is told);
+    // this was the A740's 3 MiB.
+    gpuWr64(A740_UCHE_GMEM_RANGE_MAX, 0x1000000 + 0x180000 - 1);
     gpuWr(A740_UCHE_CACHE_WAYS, 1u << 23);
     gpuWr(A740_CP_AHB_CNTL, 0x1);
     gpuWr(A740_RBBM_PERFCTR_CNTL, 0x1);
