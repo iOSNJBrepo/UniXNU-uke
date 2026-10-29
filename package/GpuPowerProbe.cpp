@@ -1691,7 +1691,8 @@ void heartbeat() {
             // position (start + (size - rem) * 4); the 96 words before it and 16 after are dumped, then IB1's first 128 words.
             {
                 static bool dumped;
-                if (!dumped) {
+                // Only a stall with BV on a draw (CP_DRAW_INDX_OFFSET, 0x38) is the binning hang; a passing stall must not use the dump.
+                if (!dumped && ((sqe[3] >> 16) & 0x7f) == 0x38) {
                     dumped = true;
                     // One GPU table walk and one uncached mapping per 4 KiB page, kept while reads stay on it (a walk and a mapping per
                     // word stalled this thread for minutes on IB2's packet walk).
