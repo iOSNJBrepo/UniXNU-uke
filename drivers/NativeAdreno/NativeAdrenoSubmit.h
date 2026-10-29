@@ -42,6 +42,7 @@ class NativeAdrenoSubmit final {
     NativeAdrenoSubmitStats stats_{};
     bool attached_=false,poisoned_=false;
     uint32_t audit_tick_=0;   /* submissions since attach; every eighth one audits its IB lines */
+    uint32_t last_queue_=~0u; /* uke: the previous submission's queue, for the context-switch reset */
     Job *find(uint32_t fence);
     Job *free();
     IOReturn release(Job &);

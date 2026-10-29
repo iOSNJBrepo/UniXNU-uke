@@ -522,6 +522,8 @@ extern "C" volatile uint64_t native_legacy_vsync_events[6] __attribute__((weak))
 extern "C" volatile uint32_t native_legacy_vsync_hz __attribute__((weak));
 extern "C" volatile uint32_t native_legacy_fps_max __attribute__((weak)), native_legacy_fps_bands[6] __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_mib __attribute__((weak)), native_adreno_pool_status __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_ctx_reset __attribute__((weak));
+extern "C" volatile uint64_t native_adreno_ctx_resets __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak));
 extern "C" volatile uint32_t native_data_persist_state __attribute__((weak)), native_data_persist_header __attribute__((weak));
 extern "C" volatile uint64_t native_data_persist_loaded __attribute__((weak)), native_data_persist_writes __attribute__((weak)),
@@ -1423,6 +1425,8 @@ void gpuStart() {
     // (UKE SUBMIT wc=1.7-2.6 ms per submission, 2026-10-28). 1024 here, not the sheng's 1536: the uke runs iPadOS in a 4.75 GiB
     // window; the bring-up halves it until one fits.
     {unsigned pool = 1024; PE_parse_boot_argn("sheng-gpu-pool", &pool, sizeof pool); if (&native_adreno_pool_mib) native_adreno_pool_mib = pool;}
+    // The A7XX context entry on context switches (NativeAdrenoSubmit.cpp): sheng-gpu-ctxreset 0 open only, 1 queue change (default), 2 always.
+    {unsigned mode = 1; PE_parse_boot_argn("sheng-gpu-ctxreset", &mode, sizeof mode); if (&native_adreno_ctx_reset) native_adreno_ctx_reset = mode;}
     const IOReturn ctx = NativeAdrenoGpuContextBringup(reinterpret_cast<volatile uint8_t *>(gSmmuMap->getVirtualAddress()),
         kSmmuWindow, 0, 2, 0, 0, 1, 0xffff, gpuCtxProgress, &q);
     // Q s<step> st<IOReturn> k<program>/<attach kit status> p<phase>e<enabled> r<route phase>v<verified> n<spans>
@@ -1632,6 +1636,8 @@ void heartbeat() {
             uint64_t us[6] = {};
             for (unsigned i = 1; i < 6; ++i) {absolutetime_to_nanoseconds(native_adreno_submit_phase[i], &us[i]); us[i] /= 1000;}
             const uint64_t n = native_adreno_submit_phase[0];
+            IOLog("UKE CTXRESET: H%u mode=%u resets=%llu\n", t, &native_adreno_ctx_reset ? native_adreno_ctx_reset : 0u,
+                  &native_adreno_ctx_resets ? (unsigned long long)native_adreno_ctx_resets : 0ull);
             IOLog("UKE SUBMIT: H%u n=%llu us/submit validate=%llu wc=%llu publish=%llu tlb=%llu ring=%llu\n", t, (unsigned long long)n,
                   (unsigned long long)(us[1] / n), (unsigned long long)(us[2] / n), (unsigned long long)(us[3] / n),
                   (unsigned long long)(us[4] / n), (unsigned long long)(us[5] / n));

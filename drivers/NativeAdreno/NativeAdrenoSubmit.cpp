@@ -76,6 +76,7 @@ size_t NativeAdrenoSubmit::outstanding() const
  * and audit, the publication of mapped BOs (with its coherence samples), the TLB invalidation and the ring write. Logged by
  * GpuPowerProbe's heartbeat as UKE SUBMIT. */
 extern "C" {volatile uint64_t native_adreno_submit_phase[6];}
+extern "C" {volatile uint32_t native_adreno_ctx_reset=1;volatile uint64_t native_adreno_ctx_resets;}
 extern "C" uint64_t mach_absolute_time(void);
 IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers,size_t count,
     uint32_t queue,uint32_t *fence)
@@ -188,6 +189,15 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers,size
         for(unsigned i=0;i<28;++i)native_adreno_ib_log[slot][4+i]=head[i];
         native_adreno_ib_log_count=native_adreno_ib_log_count+1;
     }
+    /* uke: a6xx_set_pagetable() emits the A7XX context entry (CP_RESET_CONTEXT_STATE: on-chip timestamps, the BV/BR resource table
+     * and counters) whenever the ring switches to another context. This ring did it only once per client open, while the render server
+     * and other clients' submissions interleave on the one ring: a binning draw then waited on BV for a resource-table entry that was
+     * never freed, with every pipeline block idle (RBBM_STATUS 0x800005, 2026-10-29). native_adreno_ctx_reset: 0 per open only,
+     * 1 when the submitting queue changes (Linux's context switch), 2 every submission. */
+    if(native_adreno_ctx_reset==2 || (native_adreno_ctx_reset==1 && queue!=last_queue_)) {
+        ring_->requestContextReset();native_adreno_ctx_resets=native_adreno_ctx_resets+1;
+    }
+    last_queue_=queue;
     status=ring_->submitFramed(words,word_count,&value);
     if(status) {
         /* A poisoned ring may already have consumed the WPTR write, so the
