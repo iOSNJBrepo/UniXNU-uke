@@ -1492,7 +1492,21 @@ void gpuStart() {
     gpuWr(A740_CP_APRIV_CNTL, 0x6f);
     gpuWr(A740_CP_BV_APRIV_CNTL, 0x0f);
     gpuWr(A740_CP_LPAC_APRIV_CNTL, 0x0f);
-    gpuWr(A740_RB_CMP_DBG_ECO_CNTL, gpuRd(A740_RB_CMP_DBG_ECO_CNTL) | (1u << 11));
+    // uke: the stock KGSL's gen7_start for gen7_11_0 (msm_kgsl.ko from this unit's vendor_dlkm) writes registers this A740-derived
+    // init did not: UCHE_CMDQ_CONFIG (also Linux's a7xx value), the CP/BV/LPAC chicken bits, and RB_CMP_DBG_ECO_CNTL bit 19 instead
+    // of the A740's bit 11. The binning pass hung with BV's CP on an indexed draw and every pipeline block idle (2026-10-29).
+    // sheng-gpu-kgslregs=0 keeps the old values.
+    unsigned kgslRegs = 1;
+    PE_parse_boot_argn("sheng-gpu-kgslregs", &kgslRegs, sizeof kgslRegs);
+    if (kgslRegs) {
+        gpuWr(A740_RB_CMP_DBG_ECO_CNTL, gpuRd(A740_RB_CMP_DBG_ECO_CNTL) | (1u << 19));
+        gpuWr(0x0e3c, 0x6690e);   // UCHE_CMDQ_CONFIG
+        gpuWr(0x0841, 1);         // CP_CHICKEN_DBG
+        gpuWr(0x0ada, 1);         // CP_BV_CHICKEN_DBG
+        gpuWr(0x0b30, 1);         // CP_LPAC_CHICKEN_DBG
+    } else {
+        gpuWr(A740_RB_CMP_DBG_ECO_CNTL, gpuRd(A740_RB_CMP_DBG_ECO_CNTL) | (1u << 11));
+    }
     // a6xx_set_ubwc_config, sm8550_data: UBWC 4.0 encoder, swizzle levels 2+3, highest bank bit 16 (hbb_lo 3, hbb_hi 0),
     // AMSBC on (>= 3.0), rgb565 predicator on (>= 4.0), min_acc_len_64b off, ubwc_mode off, uavflagprd_inv 2,
     // macrotile mode on.
